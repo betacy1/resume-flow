@@ -1,0 +1,51 @@
+package com.resumeflow.entity;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+
+/**
+ * 用户自定义字段表 user_custom_field
+ */
+@Entity
+@Table(name = "user_custom_field")
+@Data
+@EqualsAndHashCode(callSuper = true)
+public class UserCustomField extends BaseEntity {
+
+    @Column(name = "template_id")
+    private Long templateId;
+
+    @Column(name = "field_key", nullable = false, length = 100)
+    private String fieldKey;
+
+    @Column(name = "field_name", nullable = false, length = 100)
+    private String fieldName;
+
+    @Column(name = "field_type", nullable = false, length = 30)
+    private String fieldType;
+
+    @Column(name = "field_category", length = 50)
+    private String fieldCategory;
+
+    @Column(name = "field_value", columnDefinition = "TEXT")
+    private String fieldValue;
+
+    @Column(name = "match_keywords", columnDefinition = "TEXT")
+    private String matchKeywords;
+
+    /** 来源引用，格式 sourceType:sourceId，如 internship:1 / project:3 / material:5，用于选择内容版本与日期 */
+    @Column(name = "source_ref", length = 50)
+    private String sourceRef;
+
+    @Column(name = "sensitive", nullable = false)
+    private Boolean sensitive = false;
+
+    @Column(name = "enabled", nullable = false)
+    private Boolean enabled = true;
+
+    @Column(name = "sort_order")
+    private Integer sortOrder = 0;
+}

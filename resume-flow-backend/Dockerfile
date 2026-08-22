@@ -1,0 +1,18 @@
+# ---- Build Stage ----
+FROM maven:3.9-eclipse-temurin-17 AS builder
+WORKDIR /build
+COPY pom.xml .
+RUN mvn dependency:go-offline -B
+COPY src ./src
+RUN mvn package -DskipTests -B
+
+# ---- Runtime Stage ----
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY --from=builder /build/target/*.jar app.jar
+
+ENV JAVA_OPTS="-Xms256m -Xmx512m"
+ENV SPRING_PROFILES_ACTIVE=prod
+
+EXPOSE 8080
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

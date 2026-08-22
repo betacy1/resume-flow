@@ -1,0 +1,50 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  profiles:
+    active: dev
+  application:
+    name: resume-flow-backend
+
+# JWT 配置
+jwt:
+  secret: resume-flow-jwt-secret-key-2024-very-long-secure-string-at-least-256-bits
+  expiration: 86400000  # 24小时（毫秒）
+  header: Authorization
+  prefix: "Bearer "
+
+# ResumeFlow 自定义配置
+resumeflow:
+  # 敏感字段是否也自动填写（默认 true：身份证/紧急联系人等按普通字段自动填写）
+  auto-fill-sensitive: true
+  # 敏感字段关键词（仅保留密码类；命中且 auto-fill-sensitive=false 时不自动填写）
+  sensitive-keywords:
+    - 密码
+    - 支付密码
+    - password
+  # 允许 CORS 的来源
+  cors-allowed-origins:
+    - "http://localhost:5173"
+    - "http://localhost:5174"
+    - chrome-extension://*
+    - moz-extension://*
+    - edge-extension://*
+
+# Knife4j 配置
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+
+logging:
+  level:
+    com.resumeflow: info
+    org.hibernate.SQL: warn

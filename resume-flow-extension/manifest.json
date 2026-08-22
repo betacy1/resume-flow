@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "ResumeFlow 网申填表助手",
+  "version": "1.0.0",
+  "description": "智能识别网申页面表单字段，辅助填写简历信息（不自动提交）",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "ResumeFlow 填表助手"
+  },
+  "background": {
+    "service_worker": "src/background.ts",
+    "type": "module"
+  },
+  "options_page": "src/options/options.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "resumeflow@example.com",
+      "strict_min_version": "109.0"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "resume-flow-extension",
+  "version": "1.0.0",
+  "description": "ResumeFlow 网申简历智能填表助手 - 跨浏览器插件",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/zip.mjs",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.0",
+    "@crxjs/vite-plugin": "^2.0.0-beta.25",
+    "adm-zip": "^0.5.12",
+    "@types/adm-zip": "^0.5.5"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ResumeFlow 设置</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <div id="app">
+    <h1>ResumeFlow 设置</h1>
+    <div class="form-group">
+      <label>后端服务地址</label>
+      <input type="text" id="backend-url" placeholder="http://localhost:8080" />
+    </div>
+    <button id="btn-save" class="btn btn-primary">保存设置</button>
+    <p id="save-msg" class="msg"></p>
+
+    <hr />
+
+    <h2>最近一次填写报告</h2>
+    <div id="last-report" class="report">暂无填写记录</div>
+
+    <hr />
+
+    <h2>关于</h2>
+    <p>ResumeFlow 是一个网申简历智能填表助手。</p>
+    <p>请在管理后台维护您的简历信息和岗位模板。</p>
+    <p>本插件仅辅助填写表单，不会自动点击提交按钮。</p>
+    <p>所有填写结果请人工检查后再提交。</p>
+  </div>
+  <script type="module" src="options.ts"></script>
+</body>
+</html>

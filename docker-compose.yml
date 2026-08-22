@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库（生产环境）
+  mysql:
+    image: mysql:8.0
+    container_name: resumeflow-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-resume_flow}
+      MYSQL_USER: ${MYSQL_USER:-resumeflow}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-resumeflow123}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - resumeflow-net
+    restart: unless-stopped
+
+  # Redis（预留，暂未启用）
+  redis:
+    image: redis:7-alpine
+    container_name: resumeflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - resumeflow-net
+    restart: unless-stopped
+
+  # Spring Boot 后端
+  backend:
+    build: ./resume-flow-backend
+    container_name: resumeflow-backend
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: resume_flow
+      MYSQL_USERNAME: ${MYSQL_USER:-resumeflow}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-resumeflow123}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mysql
+    networks:
+      - resumeflow-net
+    restart: unless-stopped
+
+  # 管理后台 Nginx
+  admin:
+    image: nginx:alpine
+    container_name: resumeflow-admin
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./resume-flow-admin/dist:/usr/share/nginx/html
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./nginx/certs:/etc/nginx/certs
+    depends_on:
+      - backend
+    networks:
+      - resumeflow-net
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  resumeflow-net:
+    driver: bridge
