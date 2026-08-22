@@ -1,5 +1,7 @@
 server:
   port: 8080
+  # 监听所有网卡，保证容器/远程环境下外部可访问（不能写 127.0.0.1）
+  address: 0.0.0.0
   servlet:
     context-path: /
 
