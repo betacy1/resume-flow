@@ -40,7 +40,6 @@ export interface UserCustomFieldDTO {
   fieldCategory?: string;
   fieldValue?: string;
   matchKeywords?: string[];
-  sensitive?: boolean;
   enabled?: boolean;
   sortOrder?: number;
   updateTime?: string;

@@ -10,10 +10,11 @@
  */
 
 import { MessageType } from '../utils/events';
-import { getAuth } from '../services/storageService';
+import { getAuth, getBackendUrl } from '../services/storageService';
 import { getPanelState, savePanelState, type PanelState } from '../services/panelStateService';
 import { getSyncCache, saveSyncCache, patchSyncCache, restoreSyncCache, type SyncCache } from '../services/syncCacheService';
-import { scanFields, scanElement } from '../services/fieldScanService';
+import { scanFields, scanElement, countBlocks } from '../services/fieldScanService';
+import { ensureBlocks, type RepeatableBlockType } from '../services/blockService';
 import { applyMatches, fillConfirmItem, setElementValue, locateFieldElement, readElementText, type ConfirmItem } from '../services/autofillService';
 import { recommendFields, type RecommendItem } from '../services/localMatchService';
 import { checkContent } from '../services/qualityCheck';
@@ -134,15 +135,29 @@ async function ensureHost(): Promise<void> {
   style.textContent = PANEL_CSS;
   shadow.appendChild(style);
 
-  // 面板内事件不冒泡到招聘页面
+  // 面板内事件不冒泡到招聘页面。
+  // 必须用冒泡阶段（第三参数为 false）：捕获阶段拦截会阻断事件进入 Shadow DOM，
+  // 导致面板内所有按钮/拖动/输入全部失效。
   for (const type of ['pointerdown', 'pointerup', 'pointermove', 'mousedown', 'mouseup', 'click',
     'dblclick', 'keydown', 'keyup', 'keypress', 'input', 'change', 'focusin', 'focusout',
-    'wheel', 'touchstart', 'touchmove', 'touchend', 'contextmenu', 'selectionchange']) {
-    host.addEventListener(type, (e) => e.stopPropagation(), true);
+    'wheel', 'touchstart', 'touchmove', 'touchend', 'contextmenu']) {
+    host.addEventListener(type, (e) => e.stopPropagation());
   }
 
   (document.body || document.documentElement).appendChild(host);
   trackExternalFocus();
+  watchAuthChange();
+}
+
+/** 监听登录态变化：弹窗登录成功后无需关闭/刷新页面，面板自动重新渲染 */
+function watchAuthChange(): void {
+  const flag = window as unknown as { __rfAuthWatched?: boolean };
+  if (flag.__rfAuthWatched) return;
+  flag.__rfAuthWatched = true;
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.rf_token || !panelExists()) return;
+    render().catch(() => { /* 面板可能已关闭 */ });
+  });
 }
 
 /** 记录页面上最后聚焦的可填写元素（忽略面板自身），并刷新“已选中输入框”信息条 */
@@ -188,9 +203,11 @@ async function render(): Promise<void> {
   await applyMinimized(!!state.minimized);
 
   if (!auth) {
-    setToast('尚未登录：请点击插件弹窗登录后再使用', 'error');
+    buildLoginForm();
+    setToast('尚未登录：请在上方表单填写账号信息登录', 'warn');
     return;
   }
+  ui['login-form']?.remove();
   ui['user-text'].textContent = `用户：${auth.username}`;
   await applySitePreference();
   await refreshSelections();
@@ -372,6 +389,53 @@ function buildMiniButton(): void {
   mini.addEventListener('click', () => applyMinimized(false));
   shadow.appendChild(mini);
   ui['mini'] = mini;
+}
+
+/** 未登录时在面板内展示登录表单（经 background 代理，避免网页上下文限制） */
+function buildLoginForm(): void {
+  const body = ui['panel']?.querySelector('.rf-body');
+  if (!body || ui['login-form']) return;
+  const form = el('div', 'rf-login-form');
+  form.appendChild(el('div', 'rf-login-title', '登录 ResumeFlow'));
+  const urlInput = el('input', 'rf-edit-input') as HTMLInputElement;
+  urlInput.placeholder = '后端地址';
+  getBackendUrl().then((u) => { if (!urlInput.value) urlInput.value = u; });
+  const userInput = el('input', 'rf-edit-input') as HTMLInputElement;
+  userInput.placeholder = '用户名';
+  const pwdInput = el('input', 'rf-edit-input') as HTMLInputElement;
+  pwdInput.type = 'password';
+  pwdInput.placeholder = '密码';
+  const btn = el('button', 'rf-btn rf-btn-primary', '登录');
+  const msg = el('div', 'rf-login-msg');
+  btn.addEventListener('click', async () => {
+    const backendUrl = urlInput.value.trim();
+    const username = userInput.value.trim();
+    const password = pwdInput.value.trim();
+    if (!backendUrl || !username || !password) {
+      msg.textContent = '请填写完整登录信息';
+      msg.className = 'rf-login-msg rf-login-msg-err';
+      return;
+    }
+    btn.disabled = true;
+    msg.textContent = '登录中…';
+    msg.className = 'rf-login-msg';
+    try {
+      const resp = await chrome.runtime.sendMessage({ type: MessageType.LOGIN, username, password, backendUrl });
+      if (chrome.runtime.lastError) throw new Error(chrome.runtime.lastError.message || '通信失败');
+      if (!resp?.ok) throw new Error(resp?.message || '登录失败');
+      msg.textContent = '登录成功';
+      msg.className = 'rf-login-msg rf-login-msg-ok';
+      await render();
+    } catch (err: any) {
+      msg.textContent = `登录失败：${err?.message || err}`;
+      msg.className = 'rf-login-msg rf-login-msg-err';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  form.append(editRow('后端地址', urlInput), editRow('用户名', userInput), editRow('密码', pwdInput), btn, msg);
+  body.prepend(form);
+  ui['login-form'] = form;
 }
 
 /** 最小化切换：最小化时仅保留小按钮 */
@@ -583,27 +647,58 @@ function currentAudience(): string {
   return audience === 'general_backend' || !audience ? 'general' : audience;
 }
 
-/** 一键填写当前页面：扫描 → 后端匹配 → 预览确认 → 批量填入（不自动提交任何表单） */
+interface PreviewRow {
+  match: MatchResult;
+  fieldInfo: FieldInfo | null;
+  checked: boolean;
+  /** 疑似错误原因；非空时默认不勾选并醒目标记 */
+  suspiciousReason: string;
+  /** 展示状态：可填入 / 需确认 / 超字数 / 疑似错误 */
+  status: string;
+}
+
+/** 预览分组顺序与标题（教育/工作/项目/荣誉/家庭子组按记录名展开，前缀匹配同一顺序） */
+const PREVIEW_GROUPS = [
+  '基础信息', '个人信息', '求职意向', '教育经历', '工作/实习经历', '项目经历',
+  '家庭情况', '紧急联系人', '语言能力', '荣誉奖项', '专利成果', '专业技能', '科研经历', '校园经历',
+  '开放题', '未匹配字段', '低置信度字段',
+];
+
+/** 分组排序：子组（如“教育经历 · 北京理工大学”）跟随所属主组 */
+function groupOrder(key: string): number {
+  const idx = PREVIEW_GROUPS.findIndex((g) => key === g || key.startsWith(g + ' '));
+  return idx === -1 ? PREVIEW_GROUPS.length : idx;
+}
+
+/** 一键填写当前页面：扫描 → 后端匹配 → 经历块不足时确认并自动新增 → 重扫重匹配 → 分组预览 → 批量填入（不自动提交） */
 async function oneClickFill(): Promise<void> {
   try {
     setToast('扫描页面字段中…', 'info');
-    const fields = scanFields();
+    let fields = scanFields();
     if (fields.length === 0) {
       setToast('未发现可填写字段', 'warn');
       return;
     }
     const st = await getPanelState();
     const tpl = currentTemplate();
-    const resp = await api<AutofillMatchResponse>('/api/autofill/match', 'POST', {
+    const body = {
       templateId: tpl?.id || null,
       pageUrl: location.href,
       pageTitle: document.title,
-      fields,
       audienceType: tpl?.audienceType || undefined,
       jobDirection: st.selectedJobDirection || undefined,
       preferredInternshipId: st.selectedPriorityExperience || undefined,
       fillType: 'auto',
-    });
+    };
+    let resp = await api<AutofillMatchResponse>('/api/autofill/match', 'POST', { ...body, fields });
+
+    // 经历计划比对：块不足时先与用户确认再自动点击“添加经历”按钮
+    const addedAny = await ensureExperienceBlocks(resp);
+    if (addedAny) {
+      setToast('重新扫描新增后的页面…', 'info');
+      fields = scanFields();
+      resp = await api<AutofillMatchResponse>('/api/autofill/match', 'POST', { ...body, fields });
+    }
     lastMatchResponse = resp;
     showFillPreview(resp, fields);
   } catch (err: any) {
@@ -611,13 +706,148 @@ async function oneClickFill(): Promise<void> {
   }
 }
 
-interface PreviewRow {
-  match: MatchResult;
-  fieldInfo: FieldInfo | null;
-  checked: boolean;
+/** 比对后端经历计划与页面已有块数（实习/项目/教育/荣誉/家庭成员），不足时弹窗确认后自动新增 */
+async function ensureExperienceBlocks(resp: AutofillMatchResponse): Promise<boolean> {
+  const plan = resp.experiencePlan || [];
+  const types: RepeatableBlockType[] = ['internship', 'project', 'education', 'award', 'family'];
+  const planCounts: Record<string, number> = {};
+  for (const item of plan) planCounts[item.type] = (planCounts[item.type] || 0) + 1;
+
+  const missing: Array<{ type: RepeatableBlockType; need: number; add: number }> = [];
+  for (const t of types) {
+    if (!planCounts[t]) continue;
+    const existing = countBlocks(t);
+    if (existing < planCounts[t]) {
+      missing.push({ type: t, need: planCounts[t], add: planCounts[t] - existing });
+    }
+  }
+  if (missing.length === 0) return false;
+
+  const typeLabel: Record<string, string> = {
+    internship: '工作/实习经历', project: '项目经历', education: '教育经历',
+    award: '荣誉奖项', family: '家庭成员',
+  };
+  const lines = missing.map((m) => {
+    return `${typeLabel[m.type]}：需要 ${m.need} 段，页面已有 ${m.need - m.add} 段，将自动新增 ${m.add} 段`;
+  });
+  const ok = await confirmDialog(
+    `检测到当前模板需要填写多段经历：\n${lines.join('\n')}\n\n是否自动点击页面上的“添加/新增”按钮新增？`,
+    '自动新增并继续', '跳过新增',
+  );
+  if (!ok) return false;
+
+  let addedAny = false;
+  for (const m of missing) {
+    const result = await ensureBlocks(m.type, m.need);
+    if (result.added > 0) addedAny = true;
+    if (result.failed) {
+      setToast(`部分经历块新增失败（已新增 ${result.added} 段），请手动添加后重新扫描`, 'warn');
+    }
+  }
+  return addedAny;
 }
 
-/** 填入预览弹窗：展示字段名/类型/即将填入内容/字数/超字数/敏感/需确认，用户确认后才批量填入 */
+/** 字段证据文本（疑似检测用）：优先中文 label，其次问题/附近文本 */
+function fieldEvidenceText(info: FieldInfo | null): string {
+  if (!info) return '';
+  return [info.label, info.questionText, info.nearbyText, info.ariaLabel, info.placeholder, info.sectionTitle]
+    .filter(Boolean).join(' ');
+}
+
+/** 素材类型标签提取：matchedFieldName 形如“xxx[AI_COLLABORATION]” */
+function materialTag(matchedFieldName: string): string {
+  const m = matchedFieldName.match(/\[([A-Z_]+)\]/);
+  return m ? m[1] : '';
+}
+
+const RESPONSIBILITY_LABEL = /职责|描述|工作内容|实习内容|主要工作|负责内容|负责事项|业绩|成果|贡献/;
+const NAME_LABEL = /姓名|名字|候选人|申请人|真实姓名|\bname\b/i;
+const DATE_LIKE = /^\s*\d{4}\s*[-./年]/;
+
+/** 疑似错误检测：命中则默认不勾选并醒目标记（需求第十五节） */
+function detectSuspicious(row: { match: MatchResult; fieldInfo: FieldInfo | null }): string {
+  const { match, fieldInfo } = row;
+  const evidence = fieldEvidenceText(fieldInfo);
+  const value = String(match.value || '');
+  const isNamePick = match.matchedFieldKey === 'name' && !NAME_LABEL.test(evidence);
+  if (isNamePick && /单位|公司|企业|雇主|岗位|职位|职务|城市|地点|月薪|薪资|薪酬|语言|听说|读写|掌握程度|行业|职业|工作年限|出生|部门|学校|专业|学历/.test(evidence)) {
+    return '姓名被误匹配到非姓名字段';
+  }
+  if (/日期|时间/.test(evidence) && value && !DATE_LIKE.test(value) && !/至今|目前/.test(value)) {
+    return '日期字段推荐内容不是日期格式';
+  }
+  const tag = materialTag(match.matchedFieldName);
+  if (RESPONSIBILITY_LABEL.test(evidence) && tag && tag !== 'INTERNSHIP' && tag !== 'PROJECT') {
+    return `工作职责误匹配到「${MATERIAL_TYPE_LABELS[tag] || tag}」素材`;
+  }
+  return '';
+}
+
+/** 行状态：可填入 / 需确认 / 超字数 / 疑似错误 */
+function rowStatus(row: { match: MatchResult; fieldInfo: FieldInfo | null }, suspiciousReason: string): string {
+  if (suspiciousReason) return '疑似错误';
+  const limit = row.fieldInfo?.wordLimit ?? null;
+  if (limit != null && String(row.match.value || '').length > limit) return '超字数';
+  if (row.match.confidence < 0.75) return '需确认';
+  return '可填入';
+}
+
+/** 预览分组：基础/个人/求职意向/教育(按学校)/工作(按记录)/项目/家庭/语言/荣誉/专利/技能/科研/校园/开放题 */
+function buildPreviewGroups(rows: PreviewRow[], resp: AutofillMatchResponse): Map<string, PreviewRow[]> {
+  const groups = new Map<string, PreviewRow[]>();
+  const push = (key: string, row: PreviewRow) => {
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  };
+  for (const row of rows) {
+    const m = row.match;
+    const evidence = fieldEvidenceText(row.fieldInfo);
+    const blockIdx = (row.fieldInfo?.blockIndex ?? 0) + 1;
+    if (m.group === 'work_experience') {
+      push(`工作/实习经历 · ${m.recordName || '经历 ' + blockIdx}`, row);
+    } else if (m.group === 'project_experience') {
+      push(`项目经历 · ${m.recordName || '项目 ' + blockIdx}`, row);
+    } else if (m.group === 'education' || row.fieldInfo?.blockType === 'education') {
+      push(`教育经历 · ${m.recordName || '学校 ' + blockIdx}`, row);
+    } else if (m.group === 'award' || row.fieldInfo?.blockType === 'award') {
+      push(`荣誉奖项 · ${m.recordName || '奖项 ' + blockIdx}`, row);
+    } else if (m.group === 'family' || row.fieldInfo?.blockType === 'family') {
+      push(`家庭情况 · ${m.recordName || '成员 ' + blockIdx}`, row);
+    } else if (m.group === 'emergency') {
+      push('紧急联系人', row);
+    } else if (m.group === 'language' || row.fieldInfo?.blockType === 'language') {
+      push('语言能力', row);
+    } else if (m.group === 'patent') {
+      push('专利成果', row);
+    } else if (m.group === 'research') {
+      push('科研经历', row);
+    } else if (m.group === 'campus') {
+      push('校园经历', row);
+    } else if (m.group === 'skill') {
+      push('专业技能', row);
+    } else if (m.group === 'material') {
+      push('开放题', row);
+    } else if (m.group === 'intent' || /期望|意向|到岗|应聘类别|招聘对象/.test(evidence)) {
+      push('求职意向', row);
+    } else if (/性别|邮箱|手机|电话|证件|身份证|出生|国籍|民族|政治面貌|婚姻|身高|户籍|户口|籍贯|生源|地址|年龄/.test(evidence)) {
+      push('个人信息', row);
+    } else {
+      push('基础信息', row);
+    }
+  }
+  // 未匹配字段组（默认不勾选，仅提示手动填写）
+  const infoById = new Map(rows.map((r) => [r.match.fieldId, r.fieldInfo]));
+  for (const item of resp.unmatched || []) {
+    const info = infoById.get(item.fieldId) || null;
+    push('未匹配字段', {
+      match: { fieldId: item.fieldId, matchedFieldKey: '', matchedFieldName: item.reason || '未匹配', value: '', confidence: 0, reason: item.reason },
+      fieldInfo: info, checked: false, suspiciousReason: '', status: '未匹配',
+    });
+  }
+  return groups;
+}
+
+/** 分组预览弹窗：按模块展示，疑似错误/低置信度默认不勾选，确认前执行 finalValidation */
 function showFillPreview(resp: AutofillMatchResponse, fields: FieldInfo[]): void {
   if (!shadow) return;
   shadow.querySelectorAll('.rf-dialog-mask').forEach((n) => n.remove());
@@ -631,37 +861,24 @@ function showFillPreview(resp: AutofillMatchResponse, fields: FieldInfo[]): void
     const info = infoById.get(m.fieldId) || null;
     const limit = info?.wordLimit ?? null;
     const overLimit = limit != null && String(m.value || '').length > limit;
-    const needConfirm = m.confidence < 0.75;
-    return { match: m, fieldInfo: info, checked: !overLimit };
+    const suspiciousReason = detectSuspicious({ match: m, fieldInfo: info });
+    const status = rowStatus({ match: m, fieldInfo: info }, suspiciousReason);
+    // 默认勾选策略：疑似错误 / 超字数 / 低置信度不勾选（已移除敏感字段跳过逻辑）
+    const checked = !suspiciousReason && !overLimit && m.confidence >= 0.75;
+    return { match: m, fieldInfo: info, checked, suspiciousReason, status };
   });
+  const groups = buildPreviewGroups(rows, resp);
+  const suspiciousCount = rows.filter((r) => r.suspiciousReason).length;
 
   const mask = el('div', 'rf-dialog-mask');
   const box = el('div', 'rf-dialog rf-dialog-wide');
   box.appendChild(el('div', 'rf-dialog-title',
-    `填充预览：匹配 ${matches.length} 项，跳过 ${(resp.skipped || []).length} 项，未匹配 ${(resp.unmatched || []).length} 项`));
+    `填充预览：匹配 ${matches.length} 项，未匹配 ${(resp.unmatched || []).length} 项` + (suspiciousCount ? `，疑似错误 ${suspiciousCount} 项（已默认不勾选）` : '')));
   const list = el('div', 'rf-preview-list');
-  for (const row of rows) {
-    const m = row.match;
-    const label = row.fieldInfo?.label || row.fieldInfo?.questionText || row.fieldInfo?.placeholder || m.fieldId;
-    const content = String(m.value || '');
-    const limit = row.fieldInfo?.wordLimit ?? null;
-    const item = el('div', 'rf-preview-item');
-    const chk = document.createElement('input');
-    chk.type = 'checkbox';
-    chk.checked = row.checked;
-    chk.addEventListener('change', () => { row.checked = chk.checked; });
-    const meta = el('div', 'rf-preview-meta');
-    const tags: string[] = [row.fieldInfo?.type || '', `${content.length} 字`];
-    if (limit != null) tags.push(`限 ${limit} 字`);
-    if (limit != null && content.length > limit) tags.push('⚠ 超字数');
-    if (m.sensitive) tags.push('敏感字段');
-    if (m.confidence < 0.75) tags.push('需确认');
-    meta.appendChild(el('div', 'rf-preview-title', `${label} ← ${m.matchedFieldName}`));
-    meta.appendChild(el('div', 'rf-preview-tags', tags.filter(Boolean).join(' · ')));
-    const preview = el('div', 'rf-preview-content', content.slice(0, 60) + (content.length > 60 ? '…' : ''));
-    meta.appendChild(preview);
-    item.append(chk, meta);
-    list.appendChild(item);
+  const orderedKeys = Array.from(groups.keys()).sort((a, b) => groupOrder(a) - groupOrder(b));
+  for (const key of orderedKeys) {
+    list.appendChild(el('div', 'rf-preview-group-title', `${key}（${groups.get(key)!.length}）`));
+    for (const row of groups.get(key)!) list.appendChild(buildPreviewItem(row));
   }
   box.appendChild(list);
 
@@ -670,6 +887,19 @@ function showFillPreview(resp: AutofillMatchResponse, fields: FieldInfo[]): void
   btnCancel.addEventListener('click', () => mask.remove());
   const btnConfirm = el('button', 'rf-btn rf-btn-tiny rf-btn-primary', '确认填入');
   btnConfirm.addEventListener('click', async () => {
+    // finalValidation：确认前检查用户是否勾选了疑似错误字段
+    const checkedSusp = rows.filter((r) => r.checked && r.suspiciousReason);
+    if (checkedSusp.length > 0) {
+      const example = checkedSusp.slice(0, 2).map((r) => {
+        const label = r.fieldInfo?.label || r.fieldInfo?.questionText || r.match.fieldId;
+        return `「${label}」${r.suspiciousReason}`;
+      }).join('；');
+      const proceed = await confirmDialog(
+        `当前存在 ${checkedSusp.length} 个疑似错误字段，例如：${example}。建议取消这些字段或手动调整后再填入。是否仍要填入这些字段？`,
+        '仍要填入', '返回调整',
+      );
+      if (!proceed) return;
+    }
     mask.remove();
     await applyPreviewFills(rows, resp);
   });
@@ -677,6 +907,34 @@ function showFillPreview(resp: AutofillMatchResponse, fields: FieldInfo[]): void
   box.appendChild(actions);
   mask.appendChild(box);
   shadow.appendChild(mask);
+}
+
+/** 单个预览项：勾选框 + 字段 label / 来源 / 记录 / 类型 / 字数 / 分数 / 匹配原因 / 状态 */
+function buildPreviewItem(row: PreviewRow): HTMLElement {
+  const m = row.match;
+  const item = el('div', 'rf-preview-item' + (row.suspiciousReason ? ' rf-preview-item-suspicious' : ''));
+  const chk = document.createElement('input');
+  chk.type = 'checkbox';
+  chk.checked = row.checked;
+  chk.addEventListener('change', () => { row.checked = chk.checked; });
+  const meta = el('div', 'rf-preview-meta');
+  const label = row.fieldInfo?.label || row.fieldInfo?.questionText || row.fieldInfo?.placeholder || m.fieldId;
+  const content = String(m.value || '');
+  const limit = row.fieldInfo?.wordLimit ?? null;
+  const tags: string[] = [row.fieldInfo?.type || '', `${content.length} 字`];
+  if (limit != null) tags.push(`限 ${limit} 字`);
+  if (m.recordName) tags.push(`来源：${m.recordName}`);
+  if (m.matchedFieldKey) tags.push(`字段：${m.matchedFieldKey}`);
+  tags.push(`分数 ${m.confidence.toFixed(2)}`);
+  tags.push(row.status);
+  if (row.suspiciousReason) tags.push(`⚠ ${row.suspiciousReason}`);
+  meta.appendChild(el('div', 'rf-preview-title', `${label} ← ${m.matchedFieldName || '（无）'}`));
+  meta.appendChild(el('div', 'rf-preview-tags', tags.filter(Boolean).join(' · ')));
+  if (m.reason) meta.appendChild(el('div', 'rf-preview-reason', `匹配原因：${m.reason}`));
+  if (content) meta.appendChild(el('div', 'rf-preview-content', content.slice(0, 60) + (content.length > 60 ? '…' : '')));
+  else meta.appendChild(el('div', 'rf-preview-content', '未匹配，需手动填写'));
+  item.append(chk, meta);
+  return item;
 }
 
 /** 预览确认后批量填入：逐个定位元素 → 快照原值（可撤回）→ 填入 → 记录最近使用 */
@@ -700,7 +958,7 @@ async function applyPreviewFills(rows: PreviewRow[], resp: AutofillMatchResponse
     const res = setElementValue(target, row.match.value);
     if (res.success) {
       filled++;
-      details.push(`已填充: ${row.match.fieldId} -> ${row.match.matchedFieldName}${row.match.sensitive ? '(敏感)' : ''}`);
+      details.push(`已填充: ${row.match.fieldId} -> ${row.match.matchedFieldName}`);
       recordUsage({
         kind: 'field', refId: findFieldIdByKey(row.match.matchedFieldKey),
         name: row.match.matchedFieldName, content: row.match.value, fillType: 'auto',
@@ -718,13 +976,13 @@ async function applyPreviewFills(rows: PreviewRow[], resp: AutofillMatchResponse
     details.push(`未匹配: ${item.fieldId} - ${item.reason}`);
   }
   const result = {
-    filled, skipped, sensitive: (resp.skipped || []).filter((s) => s.sensitive).length,
+    filled, skipped,
     needConfirm: 0, unmatched: (resp.unmatched || []).length, details, confirmItems: [] as ConfirmItem[],
   };
   chrome.storage.session?.set?.({
     lastFillReport: {
       time: new Date().toLocaleString(), total: rows.length + (resp.skipped || []).length,
-      filled: result.filled, skipped: result.skipped, sensitive: result.sensitive,
+      filled: result.filled, skipped: result.skipped,
       needConfirm: 0, unmatched: result.unmatched, details: result.details,
     },
   });
@@ -1098,7 +1356,7 @@ function renderReport(result: ReturnType<typeof applyMatches>, resp: AutofillMat
   report.style.display = '';
   report.innerHTML = '';
   report.appendChild(el('div', 'rf-subtitle',
-    `填写报告：已填 ${result.filled}，跳过 ${result.skipped}（敏感 ${result.sensitive}），待确认 ${result.needConfirm}，未匹配 ${result.unmatched}`));
+    `填写报告：已填 ${result.filled}，跳过 ${result.skipped}，待确认 ${result.needConfirm}，未匹配 ${result.unmatched}`));
 
   if (result.confirmItems.length > 0) {
     report.appendChild(el('div', 'rf-report-label', '建议人工确认（置信度 0.5~0.75）：'));
@@ -1227,12 +1485,52 @@ async function applyWriteResult(res: PluginFieldWriteResult, removedId?: number)
 
 // ==================== 内容库：分类卡片 ====================
 
+/**
+ * 结构化记录展开为只读内容卡片：家庭成员（父亲/母亲）、紧急联系人、各段实习的证明人。
+ * 空值显示“未填写”且不参与自动填充；编辑请前往管理后台（插件侧只展示与填入）。
+ */
+function structuredFieldCards(): CustomFieldItem[] {
+  const cards: CustomFieldItem[] = [];
+  const mk = (category: string, key: string, name: string, value: string | null | undefined, order: number): CustomFieldItem => ({
+    fieldKey: key, fieldName: name, fieldType: 'text', fieldCategory: category,
+    fieldValue: value && String(value).trim() ? String(value) : '未填写',
+    matchKeywords: [], enabled: true, readOnly: true, sortOrder: order,
+  });
+
+  (cache?.cachedFamilyList || []).forEach((m: any, i: number) => {
+    const rel = m.relation || `家庭成员${i + 1}`;
+    const items: Array<[string, string | null | undefined]> = [
+      ['姓名', m.name], ['单位', m.company], ['职务', m.position],
+      ['联系电话', m.phone], ['邮箱', m.email], ['地址', m.address],
+    ];
+    items.forEach(([label, v], j) => cards.push(mk('家庭成员', `family_${m.id ?? i}_${label}`, `${rel}${label}`, v, i * 10 + j)));
+  });
+
+  (cache?.cachedEmergencyContactList || []).forEach((c: any, i: number) => {
+    const items: Array<[string, string | null | undefined]> = [
+      ['姓名', c.name], ['与本人关系', c.relation], ['电话', c.phone],
+      ['单位', c.company], ['职务', c.position],
+    ];
+    items.forEach(([label, v], j) => cards.push(mk('紧急联系人', `emergency_${c.id ?? i}_${label}`, `紧急联系人${label}`, v, i * 10 + j)));
+  });
+
+  (cache?.cachedInternships || []).forEach((n: any, i: number) => {
+    const company = n.shortName || n.company || `实习#${n.id ?? i}`;
+    const items: Array<[string, string | null | undefined]> = [
+      ['证明人姓名', n.certifierName], ['证明人单位及职务', n.certifierCompanyAndPosition],
+      ['证明人联系电话', n.certifierPhone], ['证明人邮箱', n.certifierEmail],
+    ];
+    items.forEach(([label, v], j) => cards.push(mk('工作/实习经历', `certifier_${n.id ?? i}_${label}`, `${label}（${company}）`, v, 100 + i * 10 + j)));
+  });
+  return cards;
+}
+
 /** 渲染分类标签（含 最近使用/收藏内容/开放题素材 页签）+ 当前页签内容卡片 */
 function renderCards(): void {
   const tabs = ui['tabs'];
   const cards = ui['cards'];
   if (!tabs || !cards) return;
-  const fields: CustomFieldItem[] = cache?.cachedFields || [];
+  const fields: CustomFieldItem[] = [...(cache?.cachedFields || []), ...structuredFieldCards()];
   const cats = Array.from(new Set(fields.map((f) => f.fieldCategory || '其他')));
   const allTabs = [...SPECIAL_TABS, ...cats];
   if (!currentCategory || !allTabs.includes(currentCategory)) {
@@ -1353,7 +1651,7 @@ function buildCard(f: CustomFieldItem): HTMLElement {
   head.appendChild(el('span', 'rf-card-name', f.fieldName));
   head.appendChild(el('span', 'rf-card-key', f.fieldKey));
   if (f.enabled === false) head.appendChild(el('span', 'rf-card-tag rf-card-tag-off', '已禁用'));
-  if (f.sensitive) head.appendChild(el('span', 'rf-card-tag rf-card-tag-sens', '敏感'));
+  // 已移除敏感字段概念：所有字段均按普通字段展示与填充
   const isFav = f.id != null && (usage?.favoriteFieldIds || []).includes(f.id);
   const btnStar = el('button', 'rf-btn rf-btn-tiny rf-btn-star' + (isFav ? ' rf-btn-star-on' : ''), isFav ? '★' : '☆');
   btnStar.title = isFav ? '取消收藏' : '收藏';
@@ -1379,15 +1677,20 @@ function buildCard(f: CustomFieldItem): HTMLElement {
   btnFill.addEventListener('click', () => fillCardToTarget(f));
   const btnTemp = el('button', 'rf-btn rf-btn-tiny', '临时编辑后填入');
   btnTemp.addEventListener('click', () => tempEditDialog(f));
-  const btnEdit = el('button', 'rf-btn rf-btn-tiny', '编辑');
-  btnEdit.addEventListener('click', () => openCardEdit(card, f));
   const btnCopy = el('button', 'rf-btn rf-btn-tiny', '复制');
   btnCopy.addEventListener('click', () => copyText(f.fieldValue || ''));
-  const btnToggle = el('button', 'rf-btn rf-btn-tiny', f.enabled === false ? '启用' : '禁用');
-  btnToggle.addEventListener('click', () => doToggleField(f));
-  const btnDelete = el('button', 'rf-btn rf-btn-tiny rf-btn-danger', '删除');
-  btnDelete.addEventListener('click', () => doDeleteField(f));
-  actions.append(btnFill, btnTemp, btnEdit, btnCopy, btnToggle, btnDelete);
+  if (f.readOnly) {
+    // 结构化记录卡片：仅展示与填入，编辑请前往管理后台（空值不参与自动填充）
+    actions.append(btnFill, btnTemp, btnCopy, el('span', 'rf-card-key', '结构化字段 · 管理后台编辑'));
+  } else {
+    const btnEdit = el('button', 'rf-btn rf-btn-tiny', '编辑');
+    btnEdit.addEventListener('click', () => openCardEdit(card, f));
+    const btnToggle = el('button', 'rf-btn rf-btn-tiny', f.enabled === false ? '启用' : '禁用');
+    btnToggle.addEventListener('click', () => doToggleField(f));
+    const btnDelete = el('button', 'rf-btn rf-btn-tiny rf-btn-danger', '删除');
+    btnDelete.addEventListener('click', () => doDeleteField(f));
+    actions.append(btnFill, btnTemp, btnEdit, btnCopy, btnToggle, btnDelete);
+  }
   card.appendChild(actions);
   return card;
 }
@@ -1396,6 +1699,10 @@ function buildCard(f: CustomFieldItem): HTMLElement {
 function fillCardToTarget(f: CustomFieldItem): void {
   if (f.enabled === false) {
     setToast('该字段已禁用，请先启用', 'warn');
+    return;
+  }
+  if (f.readOnly && (f.fieldValue || '') === '未填写') {
+    setToast('该字段暂无内容，需补充：请在管理后台填写，或点“临时编辑后填入”', 'warn');
     return;
   }
   fillValueToTarget(f.fieldValue || '', f.fieldName, {
@@ -1552,7 +1859,7 @@ async function copyText(text: string): Promise<void> {
 
 // ==================== 卡片编辑 ====================
 
-/** 卡片切换为编辑态：可改字段名/内容/关键词/字数档位/是否参与一键填充/敏感 */
+/** 卡片切换为编辑态：可改字段名/内容/关键词/字数档位/是否参与一键填充 */
 function openCardEdit(card: HTMLElement, f: CustomFieldItem): void {
   card.innerHTML = '';
   const nameInput = el('input', 'rf-edit-input') as HTMLInputElement;
@@ -1569,14 +1876,13 @@ function openCardEdit(card: HTMLElement, f: CustomFieldItem): void {
   lenSel.value = f.lengthType || '';
   const autoChk = checkboxEl('参与一键填充', f.autoFillEnabled !== false);
   const manualChk = checkboxEl('允许手动填充', f.manualFillEnabled !== false);
-  const sensitiveChk = checkboxEl('敏感字段', !!f.sensitive);
 
   card.append(
     editRow('字段名称', nameInput),
     editRow('内容正文', contentArea),
     editRow('匹配关键词', kwInput),
     editRow('字数档位', lenSel),
-    autoChk.wrap, manualChk.wrap, sensitiveChk.wrap,
+    autoChk.wrap, manualChk.wrap,
   );
 
   const actions = el('div', 'rf-card-actions');
@@ -1589,7 +1895,6 @@ function openCardEdit(card: HTMLElement, f: CustomFieldItem): void {
     lengthType: lenSel.value,
     autoFillEnabled: autoChk.box.checked,
     manualFillEnabled: manualChk.box.checked,
-    sensitive: sensitiveChk.box.checked,
   }));
   btnCancel.addEventListener('click', () => renderCards());
   actions.append(btnSave, btnCancel);
@@ -1598,7 +1903,7 @@ function openCardEdit(card: HTMLElement, f: CustomFieldItem): void {
 
 async function saveCardEdit(origin: CustomFieldItem, form: {
   fieldName: string; fieldValue: string; matchKeywords: string;
-  lengthType: string; autoFillEnabled: boolean; manualFillEnabled: boolean; sensitive: boolean;
+  lengthType: string; autoFillEnabled: boolean; manualFillEnabled: boolean;
 }, forceVersion?: number): Promise<void> {
   if (!form.fieldName.trim()) {
     setToast('字段名称不能为空', 'warn');
@@ -1617,7 +1922,6 @@ async function saveCardEdit(origin: CustomFieldItem, form: {
     lengthType: form.lengthType || undefined,
     autoFillEnabled: form.autoFillEnabled,
     manualFillEnabled: form.manualFillEnabled,
-    sensitive: form.sensitive,
     version: forceVersion != null ? forceVersion : origin.version,
   };
   try {
@@ -1702,7 +2006,6 @@ function buildNewForm(): void {
   kwInput.placeholder = '匹配关键词，逗号分隔';
   const autoChk = checkboxEl('参与一键填充', true);
   const manualChk = checkboxEl('允许手动填充', true);
-  const sensitiveChk = checkboxEl('敏感字段', false);
   const orderInput = el('input', 'rf-edit-input') as HTMLInputElement;
   orderInput.type = 'number';
   orderInput.value = '100';
@@ -1714,7 +2017,7 @@ function buildNewForm(): void {
     editRow('分类', catSel),
     editRow('内容正文', contentArea),
     editRow('匹配关键词', kwInput),
-    autoChk.wrap, manualChk.wrap, sensitiveChk.wrap,
+    autoChk.wrap, manualChk.wrap,
     editRow('排序', orderInput),
   );
   const actions = el('div', 'rf-card-actions');
@@ -1735,7 +2038,6 @@ function buildNewForm(): void {
       matchKeywords: kwInput.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
       autoFillEnabled: autoChk.box.checked,
       manualFillEnabled: manualChk.box.checked,
-      sensitive: sensitiveChk.box.checked,
       sortOrder: Number(orderInput.value || 100),
     };
     try {
@@ -2012,6 +2314,14 @@ const PANEL_CSS = `
   border: 1px solid #e5e6eb; border-radius: 8px; padding: 8px;
   display: flex; flex-direction: column; gap: 6px; background: #fafbfc;
 }
+.rf-login-form {
+  border: 1px solid #bedaff; border-radius: 8px; padding: 10px;
+  display: flex; flex-direction: column; gap: 6px; background: #f0f7ff;
+}
+.rf-login-title { font-weight: 600; color: #1f2329; }
+.rf-login-msg { font-size: 12px; min-height: 14px; word-break: break-all; }
+.rf-login-msg-err { color: #f53f3f; }
+.rf-login-msg-ok { color: #00b42a; }
 .rf-edit-row { display: flex; flex-direction: column; gap: 2px; }
 .rf-edit-label { color: #86909c; font-size: 11px; }
 .rf-edit-input {
@@ -2050,13 +2360,20 @@ const PANEL_CSS = `
 }
 .rf-rec-meta { display: flex; flex-direction: column; gap: 2px; }
 .rf-preview-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.rf-preview-group-title {
+  font-weight: 600; font-size: 12px; color: #165dff; background: #f0f7ff;
+  border-radius: 4px; padding: 3px 8px; margin-top: 4px;
+}
 .rf-preview-item {
   border: 1px solid #e5e6eb; border-radius: 6px; padding: 6px 8px;
-  display: flex; flex-direction: column; gap: 4px; background: #fff;
+  display: flex; flex-direction: row; align-items: flex-start; gap: 6px; background: #fff;
 }
-.rf-preview-meta { display: flex; align-items: flex-start; gap: 6px; }
+.rf-preview-item input[type="checkbox"] { margin-top: 2px; flex-shrink: 0; }
+.rf-preview-item-suspicious { border-color: #f53f3f; background: #fff7f6; }
+.rf-preview-meta { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .rf-preview-title { font-weight: 600; font-size: 12px; word-break: break-all; }
 .rf-preview-tags { color: #86909c; font-size: 11px; word-break: break-all; }
+.rf-preview-reason { color: #86909c; font-size: 11px; word-break: break-all; }
 .rf-preview-content {
   color: #4e5969; font-size: 12px; word-break: break-all;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;

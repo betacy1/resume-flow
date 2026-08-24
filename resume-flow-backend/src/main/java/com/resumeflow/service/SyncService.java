@@ -18,7 +18,7 @@ import java.util.Map;
 /**
  * 插件数据同步 Service
  * /api/sync/status 返回版本号与哈希供插件判断是否有更新；
- * /api/sync/full 返回完整可填写数据（敏感字段也一并下发，参与自动填充）。
+ * /api/sync/full 返回完整可填写数据（全部字段无过滤，参与自动填充）。
  */
 @Slf4j
 @Service
@@ -42,16 +42,16 @@ public class SyncService {
 
     /**
      * 全量同步数据：基础信息、教育、实习、项目、技能、奖项、开放题素材、
-     * 字段匹配规则（自定义字段，含敏感字段）、模板、模板经历配置、内容版本、用户偏好
+     * 字段匹配规则（自定义字段）、模板、模板经历配置、内容版本、用户偏好
      */
     public Map<String, Object> fullPayload() {
         Long userId = SecurityUtils.getCurrentUserId();
         Map<String, Object> syncStatus = versionService.status(userId);
 
-        // 简历主体：敏感字段（身份证号、紧急联系人、银行卡等）也参与自动填充，不再脱敏
+        // 简历主体：全部字段（身份证号、紧急联系人、银行卡等）均按普通字段下发，参与自动填充
         ProfileVO profile = profileService.getProfile();
 
-        // 字段匹配规则：自定义字段（含敏感字段）
+        // 字段匹配规则：全部自定义字段
         List<UserCustomFieldDTO> customFields = customFieldService.list(null, null, null, null);
 
         // 模板与模板经历配置
@@ -75,6 +75,8 @@ public class SyncService {
         payload.put("projectList", profile.getProjectList());
         payload.put("skillList", profile.getSkillList());
         payload.put("awardList", profile.getAwardList());
+        payload.put("familyList", profile.getFamilyList());
+        payload.put("emergencyContactList", profile.getEmergencyContactList());
         payload.put("materials", materialService.listMaterials(null, null));
         payload.put("customFields", customFields);
         payload.put("templates", templates);

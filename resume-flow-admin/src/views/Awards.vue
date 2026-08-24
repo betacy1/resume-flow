@@ -5,7 +5,8 @@
     <el-table :data="list" v-loading="loading" border>
       <el-table-column prop="awardName" label="奖项名称" />
       <el-table-column prop="awardType" label="类型" width="120" />
-      <el-table-column prop="awardYear" label="年份" width="100" />
+      <el-table-column prop="awardYear" label="获得时间" width="120" />
+      <el-table-column prop="awardLevel" label="级别" width="100" />
       <el-table-column prop="description" label="说明" />
       <el-table-column label="操作" width="150">
         <template #default="{ row }">
@@ -20,14 +21,22 @@
         <el-form-item label="奖项名称"><el-input v-model="editingForm.awardName" placeholder="如 北京理工大学研究生学业一等奖学金" /></el-form-item>
         <el-form-item label="类型">
           <el-select v-model="editingForm.awardType" allow-create filterable placeholder="请选择或输入">
+            <el-option label="奖项" value="奖项" />
             <el-option label="奖学金" value="奖学金" />
-            <el-option label="专利" value="专利" />
+            <el-option label="专利成果" value="专利成果" />
             <el-option label="荣誉称号" value="荣誉称号" />
             <el-option label="竞赛奖项" value="竞赛奖项" />
             <el-option label="证书" value="证书" />
           </el-select>
         </el-form-item>
-        <el-form-item label="年份"><el-input v-model="editingForm.awardYear" placeholder="如 2024" /></el-form-item>
+        <el-form-item label="获得时间"><el-input v-model="editingForm.awardYear" placeholder="如 2025.11 / 2025-03-26" /></el-form-item>
+        <el-form-item label="级别">
+          <el-select v-model="editingForm.awardLevel" allow-create filterable placeholder="请选择或输入">
+            <el-option label="院校级" value="院校级" />
+            <el-option label="省部级" value="省部级" />
+            <el-option label="国家级" value="国家级" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="说明"><el-input v-model="editingForm.description" type="textarea" :rows="3" /></el-form-item>
       </el-form>
       <template #footer>

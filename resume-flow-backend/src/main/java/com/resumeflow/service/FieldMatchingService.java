@@ -6,8 +6,11 @@ import com.resumeflow.dto.AutofillMatchRequest;
 import com.resumeflow.dto.AutofillMatchRequest.FieldInfo;
 import com.resumeflow.entity.AnswerMaterial;
 import com.resumeflow.entity.ApplicationTemplate;
+import com.resumeflow.entity.AwardCertificate;
 import com.resumeflow.entity.ContentVariant;
 import com.resumeflow.entity.EducationExperience;
+import com.resumeflow.entity.EmergencyContact;
+import com.resumeflow.entity.FamilyMember;
 import com.resumeflow.entity.InternshipExperience;
 import com.resumeflow.entity.ProjectExperience;
 import com.resumeflow.entity.TemplateExperienceConfig;
@@ -15,7 +18,10 @@ import com.resumeflow.entity.UserCustomField;
 import com.resumeflow.entity.UserProfile;
 import com.resumeflow.repository.AnswerMaterialRepository;
 import com.resumeflow.repository.ApplicationTemplateRepository;
+import com.resumeflow.repository.AwardCertificateRepository;
 import com.resumeflow.repository.EducationExperienceRepository;
+import com.resumeflow.repository.EmergencyContactRepository;
+import com.resumeflow.repository.FamilyMemberRepository;
 import com.resumeflow.repository.InternshipExperienceRepository;
 import com.resumeflow.repository.ProjectExperienceRepository;
 import com.resumeflow.repository.TemplateExperienceConfigRepository;
@@ -58,6 +64,9 @@ public class FieldMatchingService {
     private final EducationExperienceRepository educationRepository;
     private final InternshipExperienceRepository internshipRepository;
     private final ProjectExperienceRepository projectRepository;
+    private final AwardCertificateRepository awardRepository;
+    private final FamilyMemberRepository familyMemberRepository;
+    private final EmergencyContactRepository emergencyContactRepository;
     private final ApplicationTemplateRepository templateRepository;
     private final AnswerMaterialRepository materialRepository;
     private final UserCustomFieldRepository userCustomFieldRepository;
@@ -65,18 +74,6 @@ public class FieldMatchingService {
     private final ObjectMapper objectMapper;
     private final DateFormatService dateFormatService;
     private final ContentVariantService contentVariantService;
-
-    private List<String> sensitiveKeywords;
-    /** 敏感字段是否也自动填写（默认 true：匹配结果返回并标注 sensitive，由前端决定展示策略） */
-    private boolean autoFillSensitive = true;
-
-    public void setSensitiveKeywords(List<String> sensitiveKeywords) {
-        this.sensitiveKeywords = sensitiveKeywords;
-    }
-
-    public void setAutoFillSensitive(boolean autoFillSensitive) {
-        this.autoFillSensitive = autoFillSensitive;
-    }
 
     /** 字数限制提取：500字以内 / 不超过300字 / 限200字 */
     private static final Pattern WORD_LIMIT_PATTERN =
@@ -125,13 +122,164 @@ public class FieldMatchingService {
     /** 技能字段中优先填段落形式的字段名信号 */
     private static final List<String> SKILL_PARAGRAPH_FORM_SIGNALS = List.of("专业技能", "技术能力", "技能特长");
 
-    /** 实习默认优先级：受众:岗位方向 → 公司关键词顺序（大厂版内置排除银行类实习） */
+    // ==================== 经历块字段映射关键词（同一块内绑定同一条记录） ====================
+
+    /** 单位名称 → internship.company */
+    private static final List<String> BLOCK_COMPANY_KEYWORDS = List.of(
+            "单位名称", "公司名称", "企业名称", "组织名称", "工作单位", "实习单位", "任职单位",
+            "雇主名称", "所在公司", "雇主", "单位", "公司", "employer", "company", "organization");
+
+    /** 职位名称 → internship.position */
+    private static final List<String> BLOCK_POSITION_KEYWORDS = List.of(
+            "职位名称", "岗位名称", "实习岗位", "任职岗位", "工作岗位", "担任职务", "职务", "岗位", "职位",
+            "job title", "position", "role");
+
+    /** 开始时间 → internship.startDate */
+    private static final List<String> BLOCK_START_DATE_KEYWORDS = List.of(
+            "开始时间", "入职时间", "开始日期", "起始时间", "起始日期", "工作开始时间", "实习开始时间",
+            "任职开始时间", "from", "start date");
+
+    /** 结束时间 → internship.endDate */
+    private static final List<String> BLOCK_END_DATE_KEYWORDS = List.of(
+            "结束时间", "离职时间", "结束日期", "截止时间", "截止日期", "工作结束时间", "实习结束时间",
+            "任职结束时间", "end date");
+
+    /** 至今 → internship.isPresent */
+    private static final List<String> BLOCK_PRESENT_KEYWORDS = List.of(
+            "至今", "目前", "当前仍在职", "仍在职", "present", "current");
+
+    /** 部门 → internship.department */
+    private static final List<String> BLOCK_DEPARTMENT_KEYWORDS = List.of(
+            "所在部门", "实习部门", "工作部门", "任职部门", "部门", "department");
+
+    // ==================== 实习/工作证明人字段关键词（必须优先于单位/职位判断，避免“证明人单位”误匹配公司） ====================
+
+    /** 证明人/联系人/推荐人信号：命中后所有取值均来自当前块绑定的同一条实习记录 */
+    private static final List<String> BLOCK_CERTIFIER_SIGNALS = List.of(
+            "证明人", "实习证明人", "工作证明人", "经历证明人", "单位证明人", "联系人", "推荐人", "介绍人",
+            "指导老师", "指导人", "直接主管", "主管", "supervisor", "reference", "referee", "certifier",
+            "contact person");
+
+    /** 证明人单位及职务（合并字段，先于单位/职务单独判断） */
+    private static final List<String> CERTIFIER_COMBINED_SIGNALS = List.of("单位及职务", "单位和职务");
+
+    /** 证明人电话信号 */
+    private static final List<String> CERTIFIER_PHONE_SIGNALS = List.of(
+            "电话", "手机", "联系方式", "phone", "mobile");
+
+    /** 证明人邮箱信号 */
+    private static final List<String> CERTIFIER_EMAIL_SIGNALS = List.of("邮箱", "email");
+
+    /** 证明人单位信号 */
+    private static final List<String> CERTIFIER_COMPANY_SIGNALS = List.of("单位", "所在单位", "company");
+
+    /** 证明人职务信号 */
+    private static final List<String> CERTIFIER_POSITION_SIGNALS = List.of("职务", "职位", "岗位", "position");
+
+    /** 证明人关系信号 */
+    private static final List<String> CERTIFIER_RELATION_SIGNALS = List.of("关系", "与本人关系", "relationship");
+
+    // ==================== 家庭成员块字段映射关键词 ====================
+
+    private static final List<String> BLOCK_FAMILY_RELATION_KEYWORDS = List.of(
+            "关系", "与本人关系", "成员关系", "亲属关系", "家庭关系", "成员身份", "relation", "relationship");
+
+    private static final List<String> BLOCK_FAMILY_NAME_KEYWORDS = List.of(
+            "姓名", "成员姓名", "亲属姓名", "家属姓名", "家庭成员姓名", "father name", "mother name", "name");
+
+    private static final List<String> BLOCK_FAMILY_COMPANY_KEYWORDS = List.of(
+            "单位", "工作单位", "所在单位", "任职单位", "就职单位", "工作机构", "家庭成员单位",
+            "父亲单位", "母亲单位", "company", "organization", "employer");
+
+    private static final List<String> BLOCK_FAMILY_POSITION_KEYWORDS = List.of(
+            "职务", "职位", "岗位", "工作职务", "任职职务", "家庭成员职务", "父亲职务", "母亲职务",
+            "position", "job title", "role");
+
+    private static final List<String> BLOCK_FAMILY_PHONE_KEYWORDS = List.of(
+            "联系电话", "手机号", "手机", "电话", "联系方式", "家庭成员联系电话", "父亲联系电话",
+            "母亲联系电话", "phone", "mobile", "telephone");
+
+    private static final List<String> BLOCK_FAMILY_EMAIL_KEYWORDS = List.of("邮箱", "电子邮箱", "email");
+
+    private static final List<String> BLOCK_FAMILY_ADDRESS_KEYWORDS = List.of("地址", "住址", "家庭地址", "address");
+
+    private static final List<String> BLOCK_FAMILY_POLITICAL_KEYWORDS = List.of("政治面貌", "政治身份");
+
+    /** 城市/行业：经历实体无此数据源，命中时标记未匹配，绝不用姓名兜底 */
+    private static final List<String> BLOCK_NO_DATA_KEYWORDS = List.of(
+            "工作城市", "实习城市", "所在城市", "工作地点", "实习地点", "地点", "城市", "city", "location",
+            "所属行业", "公司行业", "现从事行业", "从事行业", "行业", "industry",
+            "工作年限", "现从事职业", "期望职业", "月薪", "薪资");
+
+    // ==================== 教育经历块字段映射关键词 ====================
+
+    private static final List<String> BLOCK_EDU_SCHOOL_KEYWORDS = List.of(
+            "学校", "学校名称", "毕业院校", "院校", "就读学校", "university", "school", "college");
+
+    private static final List<String> BLOCK_EDU_LEVEL_KEYWORDS = List.of(
+            "学历", "学历层次", "教育层次", "education level");
+
+    private static final List<String> BLOCK_EDU_DEGREE_KEYWORDS = List.of("学位", "degree");
+
+    private static final List<String> BLOCK_EDU_MAJOR_KEYWORDS = List.of(
+            "专业", "专业名称", "主修专业", "所学专业", "第一专业", "major");
+
+    private static final List<String> BLOCK_EDU_COLLEGE_KEYWORDS = List.of(
+            "学院", "院系", "所在学院", "所在院系", "department");
+
+    private static final List<String> BLOCK_EDU_STUDENT_ID_KEYWORDS = List.of(
+            "学号", "学生号", "student id", "student number");
+
+    private static final List<String> BLOCK_EDU_RANK_KEYWORDS = List.of(
+            "年级排名", "专业排名", "成绩排名", "综合排名", "ranking");
+
+    private static final List<String> BLOCK_EDU_STUDY_MODE_KEYWORDS = List.of(
+            "学习形式", "学历类型", "培养方式", "学习方式", "是否全日制", "全日制",
+            "education type", "study mode");
+
+    private static final List<String> BLOCK_EDU_COURSES_KEYWORDS = List.of(
+            "主修课程及成绩", "主修课程", "主要课程", "核心课程", "课程成绩", "课程",
+            "relevant courses", "major courses");
+
+    private static final List<String> BLOCK_EDU_TAGS_KEYWORDS = List.of("学校标签", "院校标签");
+
+    private static final List<String> BLOCK_EDU_BATCH_KEYWORDS = List.of("高考录取批次", "录取批次");
+
+    private static final List<String> BLOCK_EDU_GPA_KEYWORDS = List.of("gpa", "绩点");
+
+    // ==================== 荣誉奖项块字段映射关键词 ====================
+
+    private static final List<String> BLOCK_AWARD_NAME_KEYWORDS = List.of(
+            "奖项名称", "荣誉名称", "获奖名称", "奖励名称", "专利名称", "成果名称", "名称",
+            "award name", "honor name");
+
+    private static final List<String> BLOCK_AWARD_DATE_KEYWORDS = List.of(
+            "获奖时间", "获奖日期", "获得时间", "取得时间", "申请时间", "时间", "日期", "award date");
+
+    private static final List<String> BLOCK_AWARD_LEVEL_KEYWORDS = List.of(
+            "奖项级别", "荣誉级别", "级别", "level");
+
+    private static final List<String> BLOCK_AWARD_TYPE_KEYWORDS = List.of(
+            "奖项类型", "类型", "类别", "category");
+
+    /** 项目名称 → project.projectName */
+    private static final List<String> BLOCK_PROJECT_NAME_KEYWORDS = List.of(
+            "项目名称", "项目名", "项目", "project name", "project");
+
+    /** 项目角色 → project.role */
+    private static final List<String> BLOCK_PROJECT_ROLE_KEYWORDS = List.of(
+            "担任角色", "项目角色", "承担角色", "角色", "担任职位", "role");
+
+    /** 实习默认优先级：受众:岗位方向 → 公司关键词顺序；优先级只决定排序与默认集合，不决定只填一条 */
     private static final Map<String, List<String>> INTERNSHIP_PRIORITY_TABLE = Map.of(
-            "state_owned:backend", List.of("工商银行", "京东"),
-            "state_owned:ai", List.of("京东", "工商银行"),
+            "state_owned", List.of("工商银行", "京东", "字节跳动"),
+            "state_owned:backend", List.of("工商银行", "京东", "字节跳动"),
+            "state_owned:ai", List.of("工商银行", "京东", "字节跳动"),
+            "big_tech", List.of("字节跳动", "京东"),
             "big_tech:backend", List.of("字节跳动", "京东"),
-            "big_tech:ai", List.of("京东"),
-            "bank", List.of("工商银行", "字节跳动"),
+            "big_tech:ai", List.of("字节跳动", "京东"),
+            "bank", List.of("工商银行", "字节跳动", "京东"),
+            "bank:fintech", List.of("工商银行", "字节跳动", "京东"),
             "general", List.of("字节跳动", "京东", "工商银行"));
 
     private static final Map<String, List<String>> BUILTIN_KEYWORDS = new LinkedHashMap<>();
@@ -164,20 +312,30 @@ public class FieldMatchingService {
         BUILTIN_KEYWORDS.put("aiCollaboration", Arrays.asList("ai协作", "ai工具", "人工智能工具", "ai辅助开发"));
     }
 
-    /** 内置日期关键词 → 字段 key（毕业时间走 graduationDate 特殊逻辑） */
+    /** 内置日期关键词 → 字段 key（毕业时间/出生日期为固定值字段，起止时间走经历日期） */
     private static final Map<String, String> DATE_KEYWORD_FIELDS = new LinkedHashMap<>();
 
     static {
+        DATE_KEYWORD_FIELDS.put("出生日期", "birth_date");
+        DATE_KEYWORD_FIELDS.put("出生年月", "birth_date");
+        DATE_KEYWORD_FIELDS.put("生日", "birth_date");
+        DATE_KEYWORD_FIELDS.put("birth date", "birth_date");
+        DATE_KEYWORD_FIELDS.put("birthday", "birth_date");
+        DATE_KEYWORD_FIELDS.put("date of birth", "birth_date");
+        DATE_KEYWORD_FIELDS.put("dob", "birth_date");
         DATE_KEYWORD_FIELDS.put("入学时间", "eduStartDate");
         DATE_KEYWORD_FIELDS.put("毕业时间", "graduationDate");
+        DATE_KEYWORD_FIELDS.put("毕业日期", "graduationDate");
         DATE_KEYWORD_FIELDS.put("毕业年月", "graduationDate");
         DATE_KEYWORD_FIELDS.put("毕业年份", "graduationDate");
         DATE_KEYWORD_FIELDS.put("预计毕业", "graduationDate");
         DATE_KEYWORD_FIELDS.put("开始时间", "startDate");
+        DATE_KEYWORD_FIELDS.put("开始日期", "startDate");
         DATE_KEYWORD_FIELDS.put("起始时间", "startDate");
         DATE_KEYWORD_FIELDS.put("入职时间", "startDate");
         DATE_KEYWORD_FIELDS.put("start date", "startDate");
         DATE_KEYWORD_FIELDS.put("结束时间", "endDate");
+        DATE_KEYWORD_FIELDS.put("结束日期", "endDate");
         DATE_KEYWORD_FIELDS.put("离职时间", "endDate");
         DATE_KEYWORD_FIELDS.put("end date", "endDate");
     }
@@ -190,19 +348,37 @@ public class FieldMatchingService {
         List<FieldCandidate> candidates = buildCandidates(userId, request.getTemplateId(), selectedTemplate, experienceConfigs);
         List<InternshipExperience> internshipList = internshipRepository
                 .findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(userId);
-
+        List<ProjectExperience> projectList = projectRepository
+                .findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(userId);
+        List<EducationExperience> educationList = educationRepository
+                .findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(userId);
+        List<AwardCertificate> awardList = awardRepository
+                .findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(userId);
+        List<FamilyMember> familyList = familyMemberRepository
+                .findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(userId);
+        List<EmergencyContact> emergencyList = emergencyContactRepository
+                .findByUserIdAndDeletedFalseOrderByIdAsc(userId);
+    
+        AutofillMatchResponse response = new AutofillMatchResponse();
         List<MatchResult> matches = new ArrayList<>();
         List<SkippedField> skipped = new ArrayList<>();
         List<UnmatchedField> unmatched = new ArrayList<>();
-
+        response.setMatches(matches);
+        response.setSkipped(skipped);
+        response.setUnmatched(unmatched);
+    
+        // 当前模板的有序经历计划（优先级只决定排序与默认集合，不决定只填一条）：
+        // 插件据此判断需新增多少个经历块，并逐块绑定记录填充。
+        List<InternshipExperience> orderedInternships = orderInternshipsForTemplate(
+                internshipList, audience, request.getJobDirection(), request.getPreferredInternshipId(), experienceConfigs);
+        List<ProjectExperience> orderedProjects = orderProjectsForTemplate(projectList, experienceConfigs);
+        response.setExperiencePlan(buildExperiencePlan(orderedInternships, orderedProjects, educationList,
+                awardList, familyList));
+    
         if (request.getFields() == null || request.getFields().isEmpty()) {
-            AutofillMatchResponse response = new AutofillMatchResponse();
-            response.setMatches(matches);
-            response.setSkipped(skipped);
-            response.setUnmatched(unmatched);
             return response;
         }
-
+    
         for (FieldInfo field : request.getFields()) {
             if (Boolean.FALSE.equals(field.getVisible())) {
                 skipped.add(new SkippedField(field.getFieldId(), "字段不可见，跳过", false));
@@ -212,12 +388,46 @@ public class FieldMatchingService {
                 skipped.add(new SkippedField(field.getFieldId(), "字段已禁用，跳过", false));
                 continue;
             }
-
-            String text = combineFieldText(field);
-
+    
+            // 证据优先级：中文 label/问题文本/附近文本为主证据（权重最高）；
+            // input.name/id/className 仅在完全无中文证据时作弱证据，且结果降级为“需确认”。
+            String text = primaryEvidence(field);
+            boolean weakOnly = !hasText(text);
+            if (weakOnly) {
+                text = weakEvidence(field);
+            }
+    
+            // 重复块内字段（工作/实习经历、项目经历、教育经历、荣誉奖项、语言能力）：
+            // 同一块内所有字段绑定同一条记录，禁止串块取值；无数据源时留待手动，绝不用姓名兜底。
+            if (hasText(field.getBlockType()) && field.getBlockIndex() != null) {
+                if ("language".equals(field.getBlockType())) {
+                    MatchResult langMatch = matchLanguageBlockField(field, text, candidates);
+                    if (langMatch != null) {
+                        matches.add(langMatch);
+                        continue;
+                    }
+                    unmatched.add(new UnmatchedField(field.getFieldId(), "语言能力块内无可填数据，需手动选择"));
+                    continue;
+                }
+                MatchResult blockMatch = matchBlockField(userId, field, text, audience, request.getJobDirection(),
+                        orderedInternships, orderedProjects, educationList, awardList, familyList);
+                if (blockMatch != null) {
+                    matches.add(blockMatch);
+                    continue;
+                }
+                // 证明人字段在对应实习记录中为空：明确提示“字段存在但未填写”，绝不用其他字段兑底
+                if ("internship".equals(field.getBlockType()) && containsAny(text, BLOCK_CERTIFIER_SIGNALS)) {
+                    unmatched.add(new UnmatchedField(field.getFieldId(),
+                            "证明人字段存在但当前记录未填写证明人信息，需手动补充"));
+                    continue;
+                }
+                unmatched.add(new UnmatchedField(field.getFieldId(),
+                        "块内无可填数据（对应记录缺失或字段无数据来源），需手动选择"));
+                continue;
+            }
+    
             // 日期字段优先走日期匹配（起止语义 + 页面格式动态格式化）；
             // 仅当文本含明确日期关键词或 input type 为 date/month 时触发，避免普通字段误判。
-            // 纯"年"/"月"拆分字段（如"入职年"）不走此分支，由自定义字段规则匹配。
             if (isDateControl(field) || hasExplicitDateKeyword(text)) {
                 MatchPick datePick = datePick(text, field, candidates);
                 if (datePick != null) {
@@ -238,7 +448,7 @@ public class FieldMatchingService {
                     continue;
                 }
             }
-
+    
             // 专业技能字段：优先于实习/项目分类，按当前模板受众选择技能内容版本（关键词/简短/完整）
             SkillFieldPlan skillPlan = classifySkillField(text, field);
             if (skillPlan != null) {
@@ -249,10 +459,10 @@ public class FieldMatchingService {
                     continue;
                 }
             }
-
+    
             MatchPick pick = pickCandidate(text, field, candidates, request.getTemplateId());
             boolean longText = isLongTextField(field);
-
+    
             // 实习类字段分类（整体描述/主要职责/成果/技术栈/合并型）
             String internFieldType = longText ? classifyInternshipFieldType(text) : null;
             boolean internExplicit = internFieldType != null;
@@ -260,9 +470,8 @@ public class FieldMatchingService {
                     && !text.contains("项目") && !text.contains("自我评价")) {
                 internFieldType = "internship_combined";
             }
-
-            // 实习类字段优先走实习推荐（命中同义词的长文本框优先于模糊匹配的低置信度通用候选）；
-            // 实习无可用版本时回退常规候选。模糊信号（非显式命中）仅在常规候选缺失时兜底。
+    
+            // 实习类字段优先走实习推荐；实习无可用版本时回退常规候选。
             if (internFieldType != null && (internExplicit || pick == null)) {
                 MatchResult internMatch = internshipVariantMatch(userId, field, internFieldType,
                         audience, request.getJobDirection(), request.getPreferredInternshipId(), internshipList,
@@ -276,17 +485,20 @@ public class FieldMatchingService {
                 unmatched.add(new UnmatchedField(field.getFieldId(), "未匹配到可用字段"));
                 continue;
             }
-
-            boolean sensitive = pick.candidate.sensitive || isSensitive(text);
-            if (sensitive && !autoFillSensitive) {
-                skipped.add(new SkippedField(field.getFieldId(), "敏感字段，需手动确认", true));
+            // 内容类型强约束：禁止把姓名填入单位/职位/城市等字段，禁止把开放题素材填入职责/描述字段；
+            // 违反时标记为未匹配，由用户手动选择，绝不做错误兕底。
+            if (isForbiddenPick(text, pick.candidate)) {
+                unmatched.add(new UnmatchedField(field.getFieldId(),
+                        "内容类型约束：该字段不允许填入\"" + pick.candidate.fieldName + "\"，未匹配，需手动选择"));
                 continue;
             }
+
+            // 已移除敏感字段跳过逻辑：个人自用场景，所有字段均按普通字段正常匹配与填充。
             if (!hasText(pick.candidate.value)) {
                 skipped.add(new SkippedField(field.getFieldId(), "字段已匹配但内容为空", false));
                 continue;
             }
-
+    
             // 长文本字段：按模板受众 × 岗位方向 × 字段类型 × 字数限制选择内容版本
             String value = pick.candidate.value;
             String variantDesc = null;
@@ -302,23 +514,26 @@ public class FieldMatchingService {
                             + variant.get().lengthType() + "/" + variant.get().fieldType();
                 }
             }
-
-            matches.add(new MatchResult(
+    
+            MatchResult result = new MatchResult(
                     field.getFieldId(),
                     pick.candidate.fieldKey,
                     pick.candidate.fieldName,
                     value,
                     pick.confidence,
-                    sensitive,
+                    false,
                     pick.reason,
                     variantDesc
-            ));
+            );
+            // 仅弱证据（无中文 label）时降级为需人工确认，避免 name/id 误判直接自动填入
+            if (weakOnly) {
+                result.setConfidence(Math.min(result.getConfidence(), 0.55));
+                result.setReason(result.getReason() + "（仅 name/id 弱证据，请确认）");
+            }
+            result.setGroup(groupOf(pick.candidate));
+            matches.add(result);
         }
-
-        AutofillMatchResponse response = new AutofillMatchResponse();
-        response.setMatches(matches);
-        response.setSkipped(skipped);
-        response.setUnmatched(unmatched);
+    
         return response;
     }
 
@@ -340,7 +555,7 @@ public class FieldMatchingService {
     }
 
     /**
-     * 日期字段匹配：先按日期关键词定位目标字段（毕业时间/经历起止），再按页面格式输出；
+     * 日期字段匹配：先按日期关键词定位目标字段（出生日期/毕业时间/经历起止），再按页面格式输出；
      * 字段上下文出现某经历关键词时，优先取该经历的日期。
      */
     private MatchPick datePick(String text, FieldInfo field, List<FieldCandidate> candidates) {
@@ -352,17 +567,19 @@ public class FieldMatchingService {
             }
         }
 
-        // 毕业时间：使用 profile.graduationDate
-        if ("graduationDate".equals(target)) {
-            FieldCandidate graduation = candidates.stream()
-                    .filter(c -> "graduationDate".equals(c.fieldKey) && hasText(c.value))
+        // 固定值日期字段（出生日期/毕业时间）：按 fieldKey 定位候选值，绝不拿姓名等非日期内容兜底
+        if ("graduationDate".equals(target) || "birth_date".equals(target)) {
+            final String targetKey = target;
+            FieldCandidate dated = candidates.stream()
+                    .filter(c -> targetKey.equals(c.fieldKey) && hasText(c.value))
                     .findFirst().orElse(null);
-            if (graduation != null) {
+            if (dated != null) {
                 String fmt = dateFormatService.detectFormat(field.getType(), field.getPlaceholder(), field.getLabel());
-                String value = dateFormatService.format(graduation.value, fmt);
-                FieldCandidate dated = new FieldCandidate("graduationDate", "毕业时间", value,
-                        graduation.keywords, false, field.getType(), null, null, null, null, null);
-                return new MatchPick(dated, 0.88, "日期匹配: 毕业时间 → " + fmt);
+                String value = dateFormatService.format(dated.value, fmt);
+                String label = "graduationDate".equals(target) ? "毕业时间" : "出生日期";
+                FieldCandidate formatted = new FieldCandidate(dated.fieldKey, label, value,
+                        dated.keywords, field.getType(), null, null, null, null, null);
+                return new MatchPick(formatted, 0.88, "日期匹配: " + label + " → " + fmt);
             }
             return null;
         }
@@ -403,7 +620,7 @@ public class FieldMatchingService {
         String value = dateFormatService.format(std, fmt);
         String key = chosen.fieldKey + (end ? ".endDate" : ".startDate");
         FieldCandidate dated = new FieldCandidate(key, chosen.fieldName + (end ? "(结束时间)" : "(开始时间)"),
-                value, chosen.keywords, false, field.getType(), null, null, null, null, null);
+                value, chosen.keywords, field.getType(), null, null, null, null, null);
         return new MatchPick(dated, 0.85, "日期匹配: " + chosen.fieldName + " " + (end ? "结束" : "开始") + "时间 → " + fmt);
     }
 
@@ -425,11 +642,8 @@ public class FieldMatchingService {
             return typePick;
         }
 
-        MatchPick templatePick = templatePriorityPick(field, candidates, templateId);
-        if (templatePick != null) {
-            return templatePick;
-        }
-
+        // 注意：已移除“岗位模板优先匹配”无差别兕底（会把 AI 协作等素材填入任意长文本），
+        // 也移除“普通 input 默认填 name”兕底；内容类型必须强约束。
         return fuzzyPick(text, candidates, templateId);
     }
 
@@ -482,24 +696,21 @@ public class FieldMatchingService {
 
     private MatchPick fieldTypePick(String text, FieldInfo field, List<FieldCandidate> candidates, Long templateId) {
         String type = lower(field.getType());
-        boolean isLongText = isLongTextField(field);
+        // 仅保留邮箱/电话的强语义类型匹配；普通 input 不再默认兕底为 name，
+        // 长文本也不再默认兕底为自我评价 —— 无明确证据时返回 null 交给未匹配。
         String preferredKey = null;
         if ("input".equals(type)) {
             if (text.contains("邮箱") || text.contains("email")) {
                 preferredKey = "email";
             } else if (text.contains("手机") || text.contains("电话") || text.contains("phone")) {
                 preferredKey = "phone";
-            } else {
-                preferredKey = "name";
             }
-        } else if (isLongText) {
-            preferredKey = "selfEvaluation";
         }
         if (preferredKey == null) return null;
 
         for (FieldCandidate candidate : candidates) {
             if (preferredKey.equals(candidate.fieldKey) || preferredKey.equalsIgnoreCase(candidate.fieldKey)) {
-                double score = (isLongText ? 0.75 : 0.72) + templateBoost(templateId, candidate.templateId);
+                double score = 0.72 + templateBoost(templateId, candidate.templateId);
                 return new MatchPick(candidate, clamp(score), "字段类型匹配: " + field.getType());
             }
         }
@@ -613,9 +824,13 @@ public class FieldMatchingService {
             return null;
         }
         String name = nz(chosen.getShortName()).isEmpty() ? nz(chosen.getCompany()) : chosen.getShortName();
-        return new MatchResult(field.getFieldId(), "internship", name + "实习经历",
+        MatchResult result = new MatchResult(field.getFieldId(), "internship", name + "实习经历",
                 value, 0.88, false,
                 "实习字段匹配: " + name + " → " + internFieldType, variantDesc);
+        result.setRecordRef("internship:" + chosen.getId());
+        result.setRecordName(name);
+        result.setGroup("work_experience");
+        return result;
     }
 
     /**
@@ -842,9 +1057,612 @@ public class FieldMatchingService {
         }
         String variantDesc = variant.get().audienceType() + "/" + variant.get().jobDirection() + "/"
                 + variant.get().lengthType() + "/" + variant.get().fieldType();
-        return new MatchResult(
+        MatchResult result = new MatchResult(
                 field.getFieldId(), "skill", "专业技能", variant.get().content(),
                 0.92, false, "技能字段匹配: " + plan.fieldType(), variantDesc);
+        result.setGroup("skill");
+        return result;
+    }
+
+    // ==================== 证据优先级 / 内容类型约束 / 经历块匹配 ====================
+
+    /** 姓名禁止兜底信号：字段文本命中任一信号时，绝不允许填入姓名 */
+    private static final List<String> NAME_FORBIDDEN_SIGNALS = List.of(
+            "单位", "公司", "企业", "雇主", "岗位", "职位", "职务", "城市", "地点", "日期", "时间",
+            "月薪", "薪资", "薪酬", "年薪", "语言", "掌握程度", "听说", "读写", "行业", "职业",
+            "工作年限", "出生", "部门", "学校", "院校", "专业", "学历", "学位", "学号", "项目", "技术栈",
+            "证件", "身份证", "紧急", "联系人", "家庭", "父亲", "母亲", "亲属", "地址", "户籍", "户口",
+            "身高", "婚姻", "民族", "国籍", "籍贯", "生源", "政治", "课程", "学院", "排名", "届别",
+            "类别", "批次", "专利", "奖项", "荣誉", "级别", "证书", "成绩",
+            "证明人", "推荐人", "介绍人", "主管");
+
+    /** 职责/描述类信号：命中时禁止填入开放题素材（AI 协作/自我评价/职业规划等） */
+    private static final List<String> RESPONSIBILITY_TYPE_SIGNALS = List.of(
+            "职责", "工作内容", "工作描述", "实习描述", "项目描述", "项目介绍", "技术栈", "主要工作");
+
+    /** 主证据：中文 label/问题文本/模块标题/附近文本，权重最高；input.name/id/className 不参与 */
+    private String primaryEvidence(FieldInfo field) {
+        StringBuilder sb = new StringBuilder();
+        append(sb, field.getLabel());
+        append(sb, field.getQuestionText());
+        append(sb, field.getSectionTitle());
+        append(sb, field.getNearbyText());
+        append(sb, field.getAriaLabel());
+        append(sb, field.getPlaceholder());
+        append(sb, field.getParentText());
+        return sb.toString().toLowerCase();
+    }
+
+    /** 弱证据：仅在完全无中文证据时使用，命中结果置信度封顶 0.55（需人工确认） */
+    private String weakEvidence(FieldInfo field) {
+        StringBuilder sb = new StringBuilder();
+        append(sb, field.getName());
+        append(sb, field.getId());
+        append(sb, field.getClassName());
+        return sb.toString().toLowerCase();
+    }
+
+    /** 内容类型强约束：禁止姓名填入非姓名字段，禁止开放题素材填入职责/描述字段 */
+    private boolean isForbiddenPick(String text, FieldCandidate candidate) {
+        if ("name".equals(candidate.fieldKey) && containsAny(text, NAME_FORBIDDEN_SIGNALS)) {
+            return true;
+        }
+        if ("material".equals(candidate.sourceType) && containsAny(text, RESPONSIBILITY_TYPE_SIGNALS)) {
+            String key = nz(candidate.fieldKey);
+            // 实习/项目类素材允许进描述字段；AI 协作/自我评价/职业规划等一律禁止
+            return !"internship".equals(key) && !"project".equals(key);
+        }
+        return false;
+    }
+
+    /** 预览分组：基础信息/教育经历/工作经历/项目经历/专业技能/家庭/语言/专利/科研/校园/开放题 */
+    private String groupOf(FieldCandidate candidate) {
+        if ("material".equals(candidate.sourceType)) {
+            return "material";
+        }
+        String key = nz(candidate.fieldKey);
+        if (key.startsWith("language_")) {
+            return "language";
+        }
+        if (key.startsWith("patent_")) {
+            return "patent";
+        }
+        if (key.startsWith("emergency_")) {
+            return "emergency";
+        }
+        if (key.startsWith("father_") || key.startsWith("family_")
+                || key.startsWith("relatives_")) {
+            return "family";
+        }
+        if ("research_experience".equals(key)) {
+            return "research";
+        }
+        if (key.startsWith("campus_")) {
+            return "campus";
+        }
+        return switch (key) {
+            case "school", "degree", "major", "gpa", "rank", "thesis", "researchDirection",
+                 "graduationDate", "eduStartDate", "highest_education", "highest_degree",
+                 "study_mode", "education_type", "graduation_class" -> "education";
+            case "expected_work_city", "expectedCity", "applicant_type", "applicantType",
+                 "expectedPosition" -> "intent";
+            case "internship" -> "work_experience";
+            case "project" -> "project_experience";
+            case "skill" -> "skill";
+            default -> "basic";
+        };
+    }
+
+    /**
+     * 当前模板应填实习经历完整列表（优先级只决定排序，不决定只填一条）：
+     * 手动指定经历置顶 → 模板经历配置（仅 autoFillEnabled 参与，按 autoFillPriority 排序）→
+     * 内置受众推荐表（公司关键词）→ 全量回退。
+     */
+    private List<InternshipExperience> orderInternshipsForTemplate(List<InternshipExperience> internships,
+            String audience, String jobDirection, Long preferredId,
+            Map<String, TemplateExperienceConfig> experienceConfigs) {
+        List<InternshipExperience> result = new ArrayList<>();
+        if (internships.isEmpty()) {
+            return result;
+        }
+        if (preferredId != null) {
+            internships.stream().filter(i -> preferredId.equals(i.getId())).findFirst().ifPresent(result::add);
+        }
+        // 1. 模板经历配置：显式关闭（autoFillEnabled=false）的不默认填，其余按优先级排序
+        List<InternshipExperience> enabled = new ArrayList<>();
+        boolean hasConfig = false;
+        for (InternshipExperience internship : internships) {
+            TemplateExperienceConfig config = experienceConfigs.get("internship:" + internship.getId());
+            if (config == null) {
+                continue;
+            }
+            hasConfig = true;
+            if (!Boolean.FALSE.equals(config.getAutoFillEnabled())) {
+                enabled.add(internship);
+            }
+        }
+        if (hasConfig && !enabled.isEmpty()) {
+            enabled.sort(Comparator.<InternshipExperience, Integer>comparing(i -> {
+                TemplateExperienceConfig config = experienceConfigs.get("internship:" + i.getId());
+                return config != null && config.getAutoFillPriority() != null
+                        ? config.getAutoFillPriority() : Integer.MAX_VALUE;
+            }).thenComparing(i -> i.getSortOrder() == null ? Integer.MAX_VALUE : i.getSortOrder()));
+            for (InternshipExperience internship : enabled) {
+                if (!result.contains(internship)) {
+                    result.add(internship);
+                }
+            }
+            return result;
+        }
+        // 2. 内置受众推荐表：大厂版默认不含银行类，银行/国央企版工行优先；命中的全部填入而非只填第一条
+        List<String> preferred = INTERNSHIP_PRIORITY_TABLE.get(audience + ":" + nz(jobDirection));
+        if (preferred == null) {
+            preferred = INTERNSHIP_PRIORITY_TABLE.getOrDefault(audience, INTERNSHIP_PRIORITY_TABLE.get("general"));
+        }
+        if (preferred != null) {
+            for (String keyword : preferred) {
+                for (InternshipExperience internship : internships) {
+                    boolean hit = nz(internship.getShortName()).contains(keyword)
+                            || nz(internship.getCompany()).contains(keyword);
+                    if (hit && !result.contains(internship)) {
+                        result.add(internship);
+                    }
+                }
+            }
+            if (!result.isEmpty()) {
+                return result;
+            }
+        }
+        // 3. 回退：全量按原排序
+        for (InternshipExperience internship : internships) {
+            if (!result.contains(internship)) {
+                result.add(internship);
+            }
+        }
+        return result;
+    }
+
+    /** 当前模板应填项目列表：配置控制启停与顺序，无配置时全部保留 */
+    private List<ProjectExperience> orderProjectsForTemplate(List<ProjectExperience> projects,
+            Map<String, TemplateExperienceConfig> experienceConfigs) {
+        List<ProjectExperience> result = new ArrayList<>();
+        if (projects.isEmpty()) {
+            return result;
+        }
+        List<ProjectExperience> enabled = new ArrayList<>();
+        boolean hasConfig = false;
+        for (ProjectExperience project : projects) {
+            TemplateExperienceConfig config = experienceConfigs.get("project:" + project.getId());
+            if (config == null) {
+                continue;
+            }
+            hasConfig = true;
+            if (!Boolean.FALSE.equals(config.getAutoFillEnabled())) {
+                enabled.add(project);
+            }
+        }
+        if (hasConfig && !enabled.isEmpty()) {
+            enabled.sort(Comparator.<ProjectExperience, Integer>comparing(p -> {
+                TemplateExperienceConfig config = experienceConfigs.get("project:" + p.getId());
+                return config != null && config.getAutoFillPriority() != null
+                        ? config.getAutoFillPriority() : Integer.MAX_VALUE;
+            }).thenComparing(p -> p.getSortOrder() == null ? Integer.MAX_VALUE : p.getSortOrder()));
+            result.addAll(enabled);
+            return result;
+        }
+        result.addAll(projects);
+        return result;
+    }
+
+    /** 经历计划：插件据此判断需要新增多少个经历块并按序绑定（含教育/奖项/家庭成员 repeatable section） */
+    private List<AutofillMatchResponse.ExperiencePlanItem> buildExperiencePlan(
+            List<InternshipExperience> orderedInternships, List<ProjectExperience> orderedProjects,
+            List<EducationExperience> educationList, List<AwardCertificate> awardList,
+            List<FamilyMember> familyList) {
+        List<AutofillMatchResponse.ExperiencePlanItem> plan = new ArrayList<>();
+        for (InternshipExperience internship : orderedInternships) {
+            plan.add(new AutofillMatchResponse.ExperiencePlanItem("internship", internship.getId(),
+                    internRecordName(internship), internship.getStartDate(), internship.getEndDate()));
+        }
+        for (ProjectExperience project : orderedProjects) {
+            plan.add(new AutofillMatchResponse.ExperiencePlanItem("project", project.getId(),
+                    projectRecordName(project), project.getStartDate(), project.getEndDate()));
+        }
+        for (EducationExperience edu : educationList) {
+            plan.add(new AutofillMatchResponse.ExperiencePlanItem("education", edu.getId(),
+                    nz(edu.getSchool()), edu.getStartDate(), edu.getEndDate()));
+        }
+        for (AwardCertificate award : awardList) {
+            plan.add(new AutofillMatchResponse.ExperiencePlanItem("award", award.getId(),
+                    nz(award.getAwardName()), award.getAwardYear(), null));
+        }
+        for (FamilyMember member : familyList) {
+            String name = hasText(member.getName()) ? nz(member.getRelation()) + "：" + member.getName()
+                    : nz(member.getRelation());
+            plan.add(new AutofillMatchResponse.ExperiencePlanItem("family", member.getId(), name, null, null));
+        }
+        return plan;
+    }
+
+    private String internRecordName(InternshipExperience internship) {
+        return hasText(internship.getShortName()) ? internship.getShortName() : nz(internship.getCompany());
+    }
+
+    private String projectRecordName(ProjectExperience project) {
+        return hasText(project.getShortName()) ? project.getShortName() : nz(project.getProjectName());
+    }
+
+    /**
+     * 经历块字段匹配：同一块内所有字段从同一条记录取值（公司/职位/起止时间/部门/职责），禁止串块。
+     * blockIndex 超出记录数量时返回 null（需先新增经历块）。
+     */
+    private MatchResult matchBlockField(Long userId, FieldInfo field, String text, String audience,
+                                        String jobDirection, List<InternshipExperience> orderedInternships,
+                                        List<ProjectExperience> orderedProjects,
+                                        List<EducationExperience> educationList,
+                                        List<AwardCertificate> awardList,
+                                        List<FamilyMember> familyList) {
+        if ("project".equals(field.getBlockType())) {
+            return matchProjectBlockField(userId, field, text, audience, jobDirection, orderedProjects);
+        }
+        if ("education".equals(field.getBlockType())) {
+            return matchEducationBlockField(field, text, educationList);
+        }
+        if ("award".equals(field.getBlockType())) {
+            return matchAwardBlockField(field, text, awardList);
+        }
+        if ("family".equals(field.getBlockType())) {
+            return matchFamilyBlockField(field, text, familyList);
+        }
+        int index = field.getBlockIndex();
+        if (index < 0 || index >= orderedInternships.size()) {
+            return null;
+        }
+        InternshipExperience record = orderedInternships.get(index);
+        String recordName = internRecordName(record);
+        String recordRef = "internship:" + record.getId();
+
+        // 证明人字段：必须优先于单位/职位/电话判断（“证明人单位”含“单位”字样），
+        // 取值始终来自当前块绑定的同一条实习记录，禁止跨记录串用，禁止用紧急联系人/父母兑底。
+        if (containsAny(text, BLOCK_CERTIFIER_SIGNALS)) {
+            if (containsAny(text, CERTIFIER_COMBINED_SIGNALS)) {
+                return blockSimpleResult(field, record.getCertifierCompanyAndPosition(), recordName, recordRef,
+                        "证明人单位及职务", "work_experience");
+            }
+            if (containsAny(text, CERTIFIER_PHONE_SIGNALS)) {
+                return blockSimpleResult(field, record.getCertifierPhone(), recordName, recordRef,
+                        "证明人联系电话", "work_experience");
+            }
+            if (containsAny(text, CERTIFIER_EMAIL_SIGNALS)) {
+                return blockSimpleResult(field, record.getCertifierEmail(), recordName, recordRef,
+                        "证明人邮箱", "work_experience");
+            }
+            if (containsAny(text, CERTIFIER_COMPANY_SIGNALS)) {
+                return blockSimpleResult(field, record.getCertifierCompany(), recordName, recordRef,
+                        "证明人单位", "work_experience");
+            }
+            if (containsAny(text, CERTIFIER_POSITION_SIGNALS)) {
+                return blockSimpleResult(field, record.getCertifierPosition(), recordName, recordRef,
+                        "证明人职务", "work_experience");
+            }
+            if (containsAny(text, CERTIFIER_RELATION_SIGNALS)) {
+                return blockSimpleResult(field, record.getCertifierRelation(), recordName, recordRef,
+                        "证明人与本人关系", "work_experience");
+            }
+            // 默认：证明人姓名（字段存在但当前记录未填写时返回 null，提示手动补充）
+            return blockSimpleResult(field, record.getCertifierName(), recordName, recordRef,
+                    "证明人姓名", "work_experience");
+        }
+
+        // 短字段：单位/职位/部门/日期/至今（结束时间先判，避免与开始时间关键词冲突）
+        if (containsAny(text, BLOCK_END_DATE_KEYWORDS)) {
+            return blockDateResult(field, record.getEndDate(), recordName, recordRef, "结束时间", "work_experience");
+        }
+        if (containsAny(text, BLOCK_START_DATE_KEYWORDS)) {
+            return blockDateResult(field, record.getStartDate(), recordName, recordRef, "开始时间", "work_experience");
+        }
+        if (containsAny(text, BLOCK_PRESENT_KEYWORDS)) {
+            if (hasText(record.getEndDate())) {
+                return null; // 已结束的经历不勾“至今”，留待手动
+            }
+            MatchResult result = new MatchResult(field.getFieldId(), "internship.isPresent", recordName + "(至今)",
+                    "是", 0.90, false, "经历块字段: " + recordName + " → 至今", null);
+            result.setRecordRef(recordRef);
+            result.setRecordName(recordName);
+            result.setGroup("work_experience");
+            return result;
+        }
+        if (containsAny(text, BLOCK_COMPANY_KEYWORDS)) {
+            return blockSimpleResult(field, record.getCompany(), recordName, recordRef, "单位名称", "work_experience");
+        }
+        if (containsAny(text, BLOCK_POSITION_KEYWORDS)) {
+            return blockSimpleResult(field, record.getPosition(), recordName, recordRef, "职位名称", "work_experience");
+        }
+        if (containsAny(text, BLOCK_DEPARTMENT_KEYWORDS)) {
+            return blockSimpleResult(field, record.getDepartment(), recordName, recordRef, "部门", "work_experience");
+        }
+        // 城市/行业/月薪等：经历实体无数据源，标记未匹配，绝不用姓名兕底
+        if (containsAny(text, BLOCK_NO_DATA_KEYWORDS)) {
+            return null;
+        }
+
+        // 长文本：职责/描述/成果/技术栈，从绑定记录取内容版本（模板受众 × 字数限制）
+        String fieldType = classifyInternshipFieldType(text);
+        if (fieldType == null) {
+            fieldType = isLongTextField(field) ? "internship_combined" : null;
+        }
+        if (fieldType == null) {
+            if (containsAny(text, INTERNSHIP_TECH_KEYWORDS)) {
+                return blockSimpleResult(field, record.getTechStack(), recordName, recordRef, "技术栈", "work_experience");
+            }
+            return null;
+        }
+        if ("internship_tech_stack".equals(fieldType)) {
+            return blockSimpleResult(field, record.getTechStack(), recordName, recordRef, "技术栈", "work_experience");
+        }
+        Optional<ContentVariantService.VariantPick> variant = contentVariantService.pickVariant(
+                userId, "internship", record.getId(), audience, jobDirection, fieldType, field.getWordLimit());
+        String value;
+        String variantDesc = null;
+        if (variant.isPresent()) {
+            value = variant.get().content();
+            variantDesc = variant.get().audienceType() + "/" + variant.get().jobDirection() + "/"
+                    + variant.get().lengthType() + "/" + variant.get().fieldType();
+        } else {
+            value = switch (fieldType) {
+                case "internship_responsibility" -> nz(record.getDescription());
+                case "internship_result" -> nz(record.getHighlights());
+                default -> nz(record.getDescription()) + nz(record.getHighlights());
+            };
+        }
+        if (!hasText(value)) {
+            return null;
+        }
+        MatchResult result = new MatchResult(field.getFieldId(), "internship", recordName + "实习经历",
+                value, 0.90, false, "经历块字段: " + recordName + " → " + fieldType, variantDesc);
+        result.setRecordRef(recordRef);
+        result.setRecordName(recordName);
+        result.setGroup("work_experience");
+        return result;
+    }
+
+    /** 教育块字段匹配：同一块内学校/学历/学位/专业/起止时间/课程等来自同一条教育记录 */
+    private MatchResult matchEducationBlockField(FieldInfo field, String text,
+                                                 List<EducationExperience> educationList) {
+        int index = field.getBlockIndex();
+        if (index < 0 || index >= educationList.size()) {
+            return null;
+        }
+        EducationExperience record = educationList.get(index);
+        String recordName = nz(record.getSchool());
+        String recordRef = "education:" + record.getId();
+
+        // 结束时间（含毕业时间叫法）先判，避免与开始时间关键词冲突
+        if (containsAny(text, BLOCK_END_DATE_KEYWORDS) || text.contains("毕业时间") || text.contains("毕业日期")) {
+            return blockDateResult(field, record.getEndDate(), recordName, recordRef, "结束时间", "education");
+        }
+        if (containsAny(text, BLOCK_START_DATE_KEYWORDS) || text.contains("入学时间") || text.contains("入学日期")) {
+            return blockDateResult(field, record.getStartDate(), recordName, recordRef, "开始时间", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_STUDENT_ID_KEYWORDS)) {
+            return blockSimpleResult(field, record.getStudentNumber(), recordName, recordRef, "学号", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_RANK_KEYWORDS)) {
+            return blockSimpleResult(field, record.getRank(), recordName, recordRef, "年级排名", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_STUDY_MODE_KEYWORDS)) {
+            return blockSimpleResult(field, record.getStudyMode(), recordName, recordRef, "学习形式", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_COURSES_KEYWORDS)) {
+            return blockSimpleResult(field, record.getCourses(), recordName, recordRef, "主修课程及成绩", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_TAGS_KEYWORDS)) {
+            return blockSimpleResult(field, record.getSchoolTags(), recordName, recordRef, "学校标签", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_BATCH_KEYWORDS)) {
+            return blockSimpleResult(field, record.getAdmissionBatch(), recordName, recordRef, "录取批次", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_COLLEGE_KEYWORDS)) {
+            return blockSimpleResult(field, record.getCollege(), recordName, recordRef, "学院", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_GPA_KEYWORDS)) {
+            return blockSimpleResult(field, record.getGpa(), recordName, recordRef, "GPA", "education");
+        }
+        // 显示专业：明确要求展示专业时优先 displayMajor
+        if (text.contains("显示专业") && hasText(record.getDisplayMajor())) {
+            return blockSimpleResult(field, record.getDisplayMajor(), recordName, recordRef, "显示专业", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_MAJOR_KEYWORDS)) {
+            return blockSimpleResult(field, record.getMajor(), recordName, recordRef, "专业", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_LEVEL_KEYWORDS)) {
+            return blockSimpleResult(field, record.getEducationLevel(), recordName, recordRef, "学历", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_DEGREE_KEYWORDS)) {
+            return blockSimpleResult(field, record.getAcademicDegree(), recordName, recordRef, "学位", "education");
+        }
+        if (containsAny(text, BLOCK_EDU_SCHOOL_KEYWORDS)) {
+            return blockSimpleResult(field, record.getSchool(), recordName, recordRef, "学校", "education");
+        }
+        return null;
+    }
+
+    /** 奖项块字段匹配：同一块内名称/时间/级别/类型来自同一条奖项记录 */
+    private MatchResult matchAwardBlockField(FieldInfo field, String text, List<AwardCertificate> awardList) {
+        int index = field.getBlockIndex();
+        if (index < 0 || index >= awardList.size()) {
+            return null;
+        }
+        AwardCertificate record = awardList.get(index);
+        String recordName = nz(record.getAwardName());
+        String recordRef = "award:" + record.getId();
+
+        if (containsAny(text, BLOCK_AWARD_LEVEL_KEYWORDS)) {
+            return blockSimpleResult(field, record.getAwardLevel(), recordName, recordRef, "级别", "award");
+        }
+        if (containsAny(text, BLOCK_AWARD_TYPE_KEYWORDS)) {
+            return blockSimpleResult(field, record.getAwardType(), recordName, recordRef, "类型", "award");
+        }
+        if (containsAny(text, BLOCK_AWARD_DATE_KEYWORDS)) {
+            return blockSimpleResult(field, record.getAwardYear(), recordName, recordRef, "获得时间", "award");
+        }
+        if (isLongTextField(field) && hasText(record.getDescription())) {
+            return blockSimpleResult(field, record.getDescription(), recordName, recordRef, "成果描述", "award");
+        }
+        if (containsAny(text, BLOCK_AWARD_NAME_KEYWORDS)) {
+            return blockSimpleResult(field, record.getAwardName(), recordName, recordRef, "名称", "award");
+        }
+        return null;
+    }
+
+    /** 家庭成员块字段匹配：同一块内关系/姓名/单位/职务/电话等来自同一条 family_member 记录 */
+    private MatchResult matchFamilyBlockField(FieldInfo field, String text, List<FamilyMember> familyList) {
+        int index = field.getBlockIndex();
+        if (index < 0 || index >= familyList.size()) {
+            return null;
+        }
+        FamilyMember record = familyList.get(index);
+        String recordName = hasText(record.getName()) ? nz(record.getRelation()) + "：" + record.getName()
+                : nz(record.getRelation());
+        String recordRef = "family:" + record.getId();
+
+        // 单位/职务/电话先判（“父亲单位”等含明确信号）；“姓名”最后判避免误吸“关系”等字段
+        if (containsAny(text, BLOCK_FAMILY_COMPANY_KEYWORDS)) {
+            return blockSimpleResult(field, record.getCompany(), recordName, recordRef, "家庭成员单位", "family");
+        }
+        if (containsAny(text, BLOCK_FAMILY_POSITION_KEYWORDS)) {
+            return blockSimpleResult(field, record.getPosition(), recordName, recordRef, "家庭成员职务", "family");
+        }
+        if (containsAny(text, BLOCK_FAMILY_PHONE_KEYWORDS)) {
+            return blockSimpleResult(field, record.getPhone(), recordName, recordRef, "家庭成员联系电话", "family");
+        }
+        if (containsAny(text, BLOCK_FAMILY_EMAIL_KEYWORDS)) {
+            return blockSimpleResult(field, record.getEmail(), recordName, recordRef, "家庭成员邮箱", "family");
+        }
+        if (containsAny(text, BLOCK_FAMILY_ADDRESS_KEYWORDS)) {
+            return blockSimpleResult(field, record.getAddress(), recordName, recordRef, "家庭地址", "family");
+        }
+        if (containsAny(text, BLOCK_FAMILY_POLITICAL_KEYWORDS)) {
+            return blockSimpleResult(field, record.getPoliticalStatus(), recordName, recordRef, "政治面貌", "family");
+        }
+        if (containsAny(text, BLOCK_FAMILY_RELATION_KEYWORDS)) {
+            return blockSimpleResult(field, record.getRelation(), recordName, recordRef, "与本人关系", "family");
+        }
+        if (containsAny(text, BLOCK_FAMILY_NAME_KEYWORDS)) {
+            return blockSimpleResult(field, record.getName(), recordName, recordRef, "家庭成员姓名", "family");
+        }
+        return null;
+    }
+
+    /** 语言块字段匹配：语言类型/掌握程度/听说/读写/证书从 language_* 候选取值，绝不填姓名 */
+    private MatchResult matchLanguageBlockField(FieldInfo field, String text, List<FieldCandidate> candidates) {
+        FieldCandidate best = null;
+        int bestLen = 0;
+        for (FieldCandidate candidate : candidates) {
+            if (candidate.fieldKey() == null || !candidate.fieldKey().startsWith("language_")) {
+                continue;
+            }
+            for (String keyword : candidate.keywords()) {
+                if (hasText(keyword) && text.contains(keyword.toLowerCase()) && keyword.length() > bestLen) {
+                    best = candidate;
+                    bestLen = keyword.length();
+                }
+            }
+        }
+        if (best == null || !hasText(best.value())) {
+            return null;
+        }
+        MatchResult result = new MatchResult(field.getFieldId(), best.fieldKey(), best.fieldName(),
+                best.value(), 0.90, false, "语言块字段: " + best.fieldName(), null);
+        result.setRecordRef("language:0");
+        result.setRecordName("英语");
+        result.setGroup("language");
+        return result;
+    }
+
+    /** 项目块字段匹配：同一块内项目名称/角色/时间/描述/成果/技术栈来自同一个 projectRecord */
+    private MatchResult matchProjectBlockField(Long userId, FieldInfo field, String text, String audience,
+                                               String jobDirection, List<ProjectExperience> orderedProjects) {
+        int index = field.getBlockIndex();
+        if (index < 0 || index >= orderedProjects.size()) {
+            return null;
+        }
+        ProjectExperience record = orderedProjects.get(index);
+        String recordName = projectRecordName(record);
+        String recordRef = "project:" + record.getId();
+
+        if (containsAny(text, BLOCK_END_DATE_KEYWORDS)) {
+            return blockDateResult(field, record.getEndDate(), recordName, recordRef, "结束时间", "project_experience");
+        }
+        if (containsAny(text, BLOCK_START_DATE_KEYWORDS)) {
+            return blockDateResult(field, record.getStartDate(), recordName, recordRef, "开始时间", "project_experience");
+        }
+        if (containsAny(text, BLOCK_PROJECT_ROLE_KEYWORDS)) {
+            return blockSimpleResult(field, record.getRole(), recordName, recordRef, "项目角色", "project_experience");
+        }
+        if (containsAny(text, BLOCK_PROJECT_NAME_KEYWORDS)) {
+            return blockSimpleResult(field, record.getProjectName(), recordName, recordRef, "项目名称", "project_experience");
+        }
+
+        String fieldType = projectFieldType(text);
+        Optional<ContentVariantService.VariantPick> variant = contentVariantService.pickVariant(
+                userId, "project", record.getId(), audience, jobDirection, fieldType, field.getWordLimit());
+        String value;
+        String variantDesc = null;
+        if (variant.isPresent()) {
+            value = variant.get().content();
+            variantDesc = variant.get().audienceType() + "/" + variant.get().jobDirection() + "/"
+                    + variant.get().lengthType() + "/" + variant.get().fieldType();
+        } else {
+            value = switch (fieldType) {
+                case "project_overview" -> hasText(record.getProjectIntro())
+                        ? record.getProjectIntro() : nz(record.getDescription());
+                case "project_responsibility" -> nz(record.getResponsibilities());
+                case "project_result" -> nz(record.getResult());
+                case "project_tech_stack" -> nz(record.getTechStack());
+                default -> nz(record.getDescription()) + nz(record.getResponsibilities()) + nz(record.getResult());
+            };
+        }
+        if (!hasText(value)) {
+            return null;
+        }
+        MatchResult result = new MatchResult(field.getFieldId(), "project", recordName + "项目",
+                value, 0.90, false, "项目块字段: " + recordName + " → " + fieldType, variantDesc);
+        result.setRecordRef(recordRef);
+        result.setRecordName(recordName);
+        result.setGroup("project_experience");
+        return result;
+    }
+
+    /** 块内短字段结果（单位/职位/部门等）；值为空时返回 null 交给未匹配 */
+    private MatchResult blockSimpleResult(FieldInfo field, String value, String recordName,
+                                          String recordRef, String fieldLabel, String groupType) {
+        if (!hasText(value)) {
+            return null;
+        }
+        MatchResult result = new MatchResult(field.getFieldId(), recordRef, recordName + "(" + fieldLabel + ")",
+                value, 0.93, false, "经历块字段: " + recordName + " → " + fieldLabel, null);
+        result.setRecordRef(recordRef);
+        result.setRecordName(recordName);
+        result.setGroup(groupType);
+        return result;
+    }
+
+    /** 块内日期字段：从绑定记录取起止时间并按页面控件格式转换（month→yyyy-MM，date→yyyy-MM-dd 等） */
+    private MatchResult blockDateResult(FieldInfo field, String stdDate, String recordName,
+                                        String recordRef, String dateLabel, String groupType) {
+        if (!hasText(stdDate)) {
+            return null;
+        }
+        String fmt = dateFormatService.detectFormat(field.getType(), field.getPlaceholder(), field.getLabel());
+        String value = dateFormatService.format(stdDate, fmt);
+        MatchResult result = new MatchResult(field.getFieldId(), recordRef + "." + dateLabel,
+                recordName + "(" + dateLabel + ")", value, 0.92, false,
+                "经历块字段: " + recordName + " → " + dateLabel + " → " + fmt, null);
+        result.setRecordRef(recordRef);
+        result.setRecordName(recordName);
+        result.setGroup(groupType);
+        return result;
     }
 
     // ==================== 候选构建 ====================
@@ -900,7 +1718,7 @@ public class FieldMatchingService {
             candidates.add(new FieldCandidate(
                     key, key, value,
                     BUILTIN_KEYWORDS.getOrDefault(key, Collections.emptyList()),
-                    false, "input", null, sourceType, sourceId, startDate, endDate
+                    "input", null, sourceType, sourceId, startDate, endDate
             ));
         }
 
@@ -921,7 +1739,7 @@ public class FieldMatchingService {
                     hasText(material.getTitle()) ? material.getTitle() : fieldKey,
                     material.getContent(),
                     BUILTIN_KEYWORDS.getOrDefault(fieldKey, Collections.emptyList()),
-                    false, "textarea", material.getTemplateId(),
+                    "textarea", material.getTemplateId(),
                     "material", material.getId(), null, null
             ));
         }
@@ -959,13 +1777,38 @@ public class FieldMatchingService {
                     field.getFieldName(),
                     field.getFieldValue(),
                     parseKeywords(field.getMatchKeywords()),
-                    Boolean.TRUE.equals(field.getSensitive()),
                     field.getFieldType(),
                     field.getTemplateId(),
                     sourceType, sourceId, startDate, endDate
             ));
         }
+
+        // 4. 紧急联系人实体（姓名/关系/电话）：含手机号也按普通字段正常参与匹配，不做脱敏或跳过；
+        //    与家庭成员分别独立维护，不允许与家庭成员字段混填。
+        EmergencyContact emergency = emergencyContactRepository.findByUserIdAndDeletedFalseOrderByIdAsc(userId)
+                .stream()
+                .filter(c -> !Boolean.FALSE.equals(c.getEnabled()))
+                .findFirst().orElse(null);
+        if (emergency != null) {
+            addEmergencyCandidate(candidates, "emergency_contact", emergency.getName(), Arrays.asList(
+                    "紧急联系人", "紧急联系人姓名", "紧急联络人", "紧急联络人姓名", "应急联系人",
+                    "emergency contact", "emergency contact name"));
+            addEmergencyCandidate(candidates, "emergency_phone", emergency.getPhone(), Arrays.asList(
+                    "紧急联系电话", "紧急联系人电话", "紧急联系人手机", "紧急联络人电话", "应急联系人电话",
+                    "emergency phone", "emergency contact phone"));
+            addEmergencyCandidate(candidates, "emergency_relation", emergency.getRelation(), Arrays.asList(
+                    "紧急联系人关系", "与紧急联系人关系", "联系人关系", "紧急联络人关系"));
+        }
         return candidates;
+    }
+
+    /** 紧急联系人实体候选：值为空时不生成候选（空字段不参与自动填充） */
+    private void addEmergencyCandidate(List<FieldCandidate> candidates, String key, String value,
+                                       List<String> keywords) {
+        if (!hasText(value)) {
+            return;
+        }
+        candidates.add(new FieldCandidate(key, key, value, keywords, "input", null, null, null, null, null));
     }
 
     private Map<String, String> buildBuiltinValueMap(UserProfile profile,
@@ -1080,32 +1923,6 @@ public class FieldMatchingService {
         return min;
     }
 
-    private String combineFieldText(FieldInfo field) {
-        StringBuilder sb = new StringBuilder();
-        append(sb, field.getLabel());
-        append(sb, field.getPlaceholder());
-        append(sb, field.getTagName());
-        append(sb, field.getName());
-        append(sb, field.getId());
-        append(sb, field.getClassName());
-        append(sb, field.getAriaLabel());
-        append(sb, field.getParentText());
-        append(sb, field.getQuestionText());
-        append(sb, field.getNearbyText());
-        return sb.toString().toLowerCase();
-    }
-
-    private boolean isSensitive(String text) {
-        if (!hasText(text) || sensitiveKeywords == null) return false;
-        String lower = text.toLowerCase();
-        for (String keyword : sensitiveKeywords) {
-            if (lower.contains(keyword.toLowerCase())) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private List<String> parseKeywords(String json) {
         if (!hasText(json)) {
             return Collections.emptyList();
@@ -1193,7 +2010,6 @@ public class FieldMatchingService {
                                   String fieldName,
                                   String value,
                                   List<String> keywords,
-                                  boolean sensitive,
                                   String fieldType,
                                   Long templateId,
                                   String sourceType,

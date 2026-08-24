@@ -37,6 +37,20 @@ export interface EducationExperienceDTO {
   college?: string;
   startDate?: string;
   endDate?: string;
+  /** 学号 */
+  studentNumber?: string;
+  /** 学历（硕士研究生/大学本科/高中） */
+  educationLevel?: string;
+  /** 学位（硕士/学士） */
+  academicDegree?: string;
+  /** 学习形式 */
+  studyMode?: string;
+  /** 主修课程及成绩 */
+  courses?: string;
+  /** 高考录取批次 */
+  admissionBatch?: string;
+  /** 显示专业 */
+  displayMajor?: string;
   gpa?: string;
   rank?: string;
   advisor?: string;
@@ -66,6 +80,51 @@ export interface InternshipExperienceDTO {
   audienceExclude?: string;
   /** 各场景模板下的优先级 JSON，如 {"bank":1,"state_owned":2}，数值越小越优先 */
   templatePriority?: string;
+  /** 证明人姓名 */
+  certifierName?: string;
+  /** 证明人单位 */
+  certifierCompany?: string;
+  /** 证明人职务 */
+  certifierPosition?: string;
+  /** 证明人单位及职务 */
+  certifierCompanyAndPosition?: string;
+  /** 证明人联系电话 */
+  certifierPhone?: string;
+  /** 证明人邮箱 */
+  certifierEmail?: string;
+  /** 证明人与本人关系 */
+  certifierRelation?: string;
+  /** 证明人备注 */
+  certifierRemark?: string;
+}
+
+/** 家庭成员（父亲/母亲等，每个用户默认都有该结构，内容可为空） */
+export interface FamilyMemberDTO {
+  id?: number;
+  relation?: string;
+  name?: string;
+  company?: string;
+  position?: string;
+  phone?: string;
+  email?: string;
+  politicalStatus?: string;
+  address?: string;
+  remark?: string;
+  sortOrder?: number;
+  enabled?: boolean;
+}
+
+/** 紧急联系人（与家庭成员分别独立维护） */
+export interface EmergencyContactDTO {
+  id?: number;
+  name?: string;
+  relation?: string;
+  phone?: string;
+  company?: string;
+  position?: string;
+  address?: string;
+  remark?: string;
+  enabled?: boolean;
 }
 
 export interface ProjectExperienceDTO {
@@ -99,6 +158,8 @@ export interface AwardCertificateDTO {
   awardName?: string;
   awardType?: string;
   awardYear?: string;
+  /** 奖项级别（院校级/省部级/国家级） */
+  awardLevel?: string;
   description?: string;
   sortOrder?: number;
 }
@@ -110,6 +171,8 @@ export interface ProfileVO {
   projectList: ProjectExperienceDTO[];
   skillList: SkillProfileDTO[];
   awardList: AwardCertificateDTO[];
+  familyList: FamilyMemberDTO[];
+  emergencyContactList: EmergencyContactDTO[];
 }
 
 export const profileApi = {
@@ -130,4 +193,10 @@ export const profileApi = {
 
   saveAward: (data: AwardCertificateDTO) => request.post('/profile/award', data),
   deleteAward: (id: number) => request.delete(`/profile/award/${id}`),
+
+  saveFamily: (data: FamilyMemberDTO) => request.post('/profile/family', data),
+  deleteFamily: (id: number) => request.delete(`/profile/family/${id}`),
+
+  saveEmergencyContact: (data: EmergencyContactDTO) => request.post('/profile/emergency-contact', data),
+  deleteEmergencyContact: (id: number) => request.delete(`/profile/emergency-contact/${id}`),
 };

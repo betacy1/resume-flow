@@ -47,8 +47,8 @@ public class AutofillService {
         logEntity.setMatchedCount(response.getMatches() != null ? response.getMatches().size() : 0);
         logEntity.setFilledCount(response.getMatches() != null ? response.getMatches().size() : 0);
         logEntity.setSkippedCount(response.getSkipped() != null ? response.getSkipped().size() : 0);
-        logEntity.setSensitiveCount((int) (response.getSkipped() == null ? 0 : response.getSkipped()
-                .stream().filter(s -> Boolean.TRUE.equals(s.getSensitive())).count()));
+        // 已废弃敏感字段概念：不再统计敏感跳过，日志正常记录全部匹配明细（含内容预览）
+        logEntity.setSensitiveCount(0);
         logEntity.setDetailJson(serializeDetail(response));
         logEntity.setClientIp(getClientIp(httpRequest));
         logEntity.setFillType("manual".equals(request.getFillType()) ? "manual" : "auto");

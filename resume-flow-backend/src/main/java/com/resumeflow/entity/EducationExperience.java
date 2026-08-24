@@ -20,6 +20,34 @@ public class EducationExperience extends BaseEntity {
     @Column(name = "school_tags", length = 100)
     private String schoolTags;
 
+    /** 学号 */
+    @Column(name = "student_number", length = 50)
+    private String studentNumber;
+
+    /** 学历（硕士研究生/大学本科/高中） */
+    @Column(name = "education_level", length = 50)
+    private String educationLevel;
+
+    /** 学位（硕士/学士） */
+    @Column(length = 50)
+    private String academicDegree;
+
+    /** 学历类型 / 学习形式，如 普通全日制 */
+    @Column(name = "study_mode", length = 100)
+    private String studyMode;
+
+    /** 主修课程及成绩 */
+    @Column(name = "courses", columnDefinition = "TEXT")
+    private String courses;
+
+    /** 高考录取批次 */
+    @Column(name = "admission_batch", length = 50)
+    private String admissionBatch;
+
+    /** 显示专业（与主修专业不同的对外展示专业名） */
+    @Column(name = "display_major", length = 100)
+    private String displayMajor;
+
     @Column(length = 100)
     private String major;
 

@@ -16,7 +16,7 @@ async function renderLastReport() {
   if (!lastFillReport) return;
   const lines = [
     `时间：${lastFillReport.time}`,
-    `总字段 ${lastFillReport.total}，已填 ${lastFillReport.filled}，跳过 ${lastFillReport.skipped}，敏感 ${lastFillReport.sensitive}，待确认 ${lastFillReport.needConfirm ?? 0}，未匹配 ${lastFillReport.unmatched}`,
+    `总字段 ${lastFillReport.total}，已填 ${lastFillReport.filled}，跳过 ${lastFillReport.skipped}，待确认 ${lastFillReport.needConfirm ?? 0}，未匹配 ${lastFillReport.unmatched}`,
   ];
   for (const detail of lastFillReport.details || []) {
     lines.push(`· ${detail}`);

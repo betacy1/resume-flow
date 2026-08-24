@@ -16,6 +16,20 @@ public class EducationExperienceDTO {
     private String college;
     private String startDate;
     private String endDate;
+    /** 学号 */
+    private String studentNumber;
+    /** 学历（硕士研究生/大学本科/高中） */
+    private String educationLevel;
+    /** 学位（硕士/学士） */
+    private String academicDegree;
+    /** 学习形式（全国普通高等院校全日制） */
+    private String studyMode;
+    /** 主修课程及成绩 */
+    private String courses;
+    /** 高考录取批次 */
+    private String admissionBatch;
+    /** 显示专业 */
+    private String displayMajor;
     private String gpa;
     private String rank;
     private String advisor;

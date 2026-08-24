@@ -7,8 +7,8 @@
  */
 
 import { MessageType } from './utils/events';
-import { getAuth, getBackendUrl } from './services/storageService';
-import { getSyncStatus, getSyncFull } from './services/apiClient';
+import { getAuth, getBackendUrl, saveAuth } from './services/storageService';
+import { getSyncStatus, getSyncFull, login as apiLogin } from './services/apiClient';
 import { getSyncCache, saveSyncCache } from './services/syncCacheService';
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -49,6 +49,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === MessageType.GET_STATUS) {
     sendResponse({ status: 'ready' });
     return false;
+  }
+
+  // 面板内嵌登录：以扩展身份调用后端登录接口（无 CORS/混合内容限制），成功后写入 token
+  if (message.type === MessageType.LOGIN) {
+    (async () => {
+      try {
+        const result = await apiLogin(message.username, message.password, message.backendUrl);
+        await saveAuth({
+          token: result.token,
+          userId: result.userId,
+          username: result.username,
+          backendUrl: message.backendUrl,
+        });
+        return { ok: true, username: result.username };
+      } catch (err: any) {
+        return { ok: false, message: String(err?.message || err) };
+      }
+    })().then(sendResponse);
+    return true;
   }
 
   // content script 的后端请求代理（扩展上下文不受网页 CORS/混合内容限制）

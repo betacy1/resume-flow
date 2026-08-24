@@ -28,7 +28,7 @@ public class SyncController {
         return Result.success(syncService.status());
     }
 
-    @Operation(summary = "全量同步：拉取当前用户完整可填写数据（敏感字段已脱敏）")
+    @Operation(summary = "全量同步：拉取当前用户完整可填写数据（全部字段，无脱敏）")
     @GetMapping("/full")
     public Result<Map<String, Object>> full() {
         return Result.success(syncService.fullPayload());

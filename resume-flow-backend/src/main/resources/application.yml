@@ -20,13 +20,7 @@ jwt:
 
 # ResumeFlow 自定义配置
 resumeflow:
-  # 敏感字段是否也自动填写（默认 true：身份证/紧急联系人等按普通字段自动填写）
-  auto-fill-sensitive: true
-  # 敏感字段关键词（仅保留密码类；命中且 auto-fill-sensitive=false 时不自动填写）
-  sensitive-keywords:
-    - 密码
-    - 支付密码
-    - password
+  # 已废弃敏感字段概念：个人自用场景，所有简历字段均按普通字段正常保存/同步/匹配/填充。
   # 允许 CORS 的来源
   cors-allowed-origins:
     - "http://localhost:5173"

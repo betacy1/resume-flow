@@ -73,7 +73,6 @@ export function setElementValue(element: HTMLElement, value: string): SetElement
 export function applyMatches(response: AutofillMatchResponse): {
   filled: number;
   skipped: number;
-  sensitive: number;
   needConfirm: number;
   unmatched: number;
   details: string[];
@@ -81,7 +80,6 @@ export function applyMatches(response: AutofillMatchResponse): {
 } {
   let filled = 0;
   let skipped = 0;
-  let sensitive = 0;
   const confirmItems: ConfirmItem[] = [];
   const details: string[] = [];
 
@@ -112,7 +110,7 @@ export function applyMatches(response: AutofillMatchResponse): {
     const success = setFieldValue(el, match.value);
     if (success) {
       filled++;
-      details.push(`已填充: ${match.fieldId} -> ${match.matchedFieldName}${variantTag}${match.sensitive ? '(敏感)' : ''}`);
+      details.push(`已填充: ${match.fieldId} -> ${match.matchedFieldName}${variantTag}`);
     } else {
       skipped++;
       details.push(`填充失败: ${match.fieldId}`);
@@ -121,7 +119,6 @@ export function applyMatches(response: AutofillMatchResponse): {
 
   for (const skip of response.skipped || []) {
     skipped++;
-    if (skip.sensitive) sensitive++;
     details.push(`跳过: ${skip.fieldId} - ${skip.reason}`);
   }
 
@@ -132,7 +129,6 @@ export function applyMatches(response: AutofillMatchResponse): {
   return {
     filled,
     skipped,
-    sensitive,
     needConfirm: confirmItems.length,
     unmatched: (response.unmatched || []).length,
     details,

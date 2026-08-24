@@ -72,7 +72,7 @@
         <el-form-item label="自我评价">
           <el-input v-model="form.selfIntroduction" type="textarea" :rows="4" placeholder="请输入自我评价" />
         </el-form-item>
-        <el-divider content-position="left">自动填写字段（非敏感，按需维护）</el-divider>
+        <el-divider content-position="left">自动填写字段（按需维护）</el-divider>
         <el-form-item label="身份证号">
           <el-input v-model="form.idCard" placeholder="自动填写字段" />
         </el-form-item>

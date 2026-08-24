@@ -13,6 +13,29 @@ public class AutofillMatchResponse {
     private List<MatchResult> matches;
     private List<SkippedField> skipped;
     private List<UnmatchedField> unmatched;
+    /** 当前模板应填经历计划（有序）：插件据此判断需要新增多少个经历块 */
+    private List<ExperiencePlanItem> experiencePlan;
+
+    /**
+     * 经历计划项：当前模板应填的一段经历/项目（含顺序）
+     */
+    @Data
+    public static class ExperiencePlanItem {
+        /** internship / project */
+        private String type;
+        private Long id;
+        private String name;
+        private String startDate;
+        private String endDate;
+
+        public ExperiencePlanItem(String type, Long id, String name, String startDate, String endDate) {
+            this.type = type;
+            this.id = id;
+            this.name = name;
+            this.startDate = startDate;
+            this.endDate = endDate;
+        }
+    }
 
     /**
      * 匹配结果
@@ -24,10 +47,17 @@ public class AutofillMatchResponse {
         private String matchedFieldName;
         private String value;
         private double confidence;
+        /** 已废弃：敏感字段概念已移除，恒为 false，仅为兼容旧版插件保留 */
         private boolean sensitive;
         private String reason;
         /** 命中的内容版本描述，如 big_tech/within_300 */
         private String variantDesc;
+        /** 绑定的经历记录引用，如 internship:2 / project:5；非经历字段为 null */
+        private String recordRef;
+        /** 绑定记录名称（如“京东集团-京东科技实习”），预览分组展示用 */
+        private String recordName;
+        /** 预览分组：work_experience / project_experience / skill / material / education / basic */
+        private String group;
 
         public MatchResult(String fieldId,
                            String matchedFieldKey,
@@ -65,6 +95,7 @@ public class AutofillMatchResponse {
     public static class SkippedField {
         private String fieldId;
         private String reason;
+        /** 已废弃：敏感字段概念已移除，恒为 false/null，仅为兼容旧版插件保留 */
         private Boolean sensitive;
 
         public SkippedField(String fieldId, String reason, Boolean sensitive) {

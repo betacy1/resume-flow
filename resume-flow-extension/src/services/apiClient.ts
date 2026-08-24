@@ -87,10 +87,11 @@ export interface CustomFieldItem {
   autoFillEnabled?: boolean;
   manualFillEnabled?: boolean;
   version?: number;
-  sensitive?: boolean;
   enabled?: boolean;
   sortOrder?: number;
   updateTime?: string;
+  /** 结构化记录展开的只读卡片（家庭成员/紧急联系人/证明人），编辑请前往管理后台 */
+  readOnly?: boolean;
 }
 
 export async function getCustomFields(templateId?: number): Promise<CustomFieldItem[]> {
@@ -152,6 +153,12 @@ export interface FieldInfo {
   wordLimit?: number;
   visible: boolean;
   disabled: boolean;
+  /** 所属重复块类型：internship / project / language，无块为 undefined */
+  blockType?: string;
+  /** 所属块序号（0 起），同一块内字段绑定同一条经历记录 */
+  blockIndex?: number;
+  /** 所属模块标题（如“工作经历”） */
+  sectionTitle?: string;
 }
 
 export interface MatchResult {
@@ -160,15 +167,28 @@ export interface MatchResult {
   matchedFieldName: string;
   value: string;
   confidence: number;
-  sensitive: boolean;
   reason: string;
   variantDesc?: string;
+  /** 绑定的经历记录引用，如 internship:2 / project:5 */
+  recordRef?: string;
+  /** 绑定记录名称（预览分组展示用） */
+  recordName?: string;
+  /** 预览分组：work_experience / project_experience / skill / material / education / basic */
+  group?: string;
+}
+
+/** 当前模板应填经历计划项（有序） */
+export interface ExperiencePlanItem {
+  type: 'internship' | 'project' | string;
+  id: number;
+  name: string;
+  startDate?: string;
+  endDate?: string;
 }
 
 export interface SkippedField {
   fieldId: string;
   reason: string;
-  sensitive?: boolean;
 }
 
 export interface UnmatchedField {
@@ -180,6 +200,8 @@ export interface AutofillMatchResponse {
   matches: MatchResult[];
   skipped: SkippedField[];
   unmatched: UnmatchedField[];
+  /** 当前模板应填经历计划（有序）：插件据此判断需要新增多少个经历块 */
+  experiencePlan?: ExperiencePlanItem[];
 }
 
 export async function autofillMatch(
@@ -260,6 +282,10 @@ export interface SyncFullPayload {
   projectList: any[];
   skillList: any[];
   awardList: any[];
+  /** 家庭成员（父亲/母亲等，含单位/职务/电话） */
+  familyList: any[];
+  /** 紧急联系人（与家庭成员分别独立维护） */
+  emergencyContactList: any[];
   materials: any[];
   customFields: CustomFieldItem[];
   templates: TemplateItem[];

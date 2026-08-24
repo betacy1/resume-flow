@@ -4,8 +4,9 @@
     <el-button type="primary" @click="openDialog()" style="margin-bottom: 16px">新增教育经历</el-button>
     <el-table :data="list" v-loading="loading" border>
       <el-table-column prop="school" label="学校" />
+      <el-table-column prop="educationLevel" label="学历" width="100" />
       <el-table-column prop="major" label="专业" />
-      <el-table-column prop="degree" label="学历" width="80" />
+      <el-table-column prop="degree" label="学位" width="80" />
       <el-table-column prop="startDate" label="开始时间" width="120" />
       <el-table-column prop="endDate" label="结束时间" width="120" />
       <el-table-column label="默认" width="60">
@@ -26,20 +27,31 @@
         <el-form-item label="学校"><el-input v-model="editingForm.school" /></el-form-item>
         <el-form-item label="学校标签"><el-input v-model="editingForm.schoolTags" placeholder="如 985、211、双一流" /></el-form-item>
         <el-form-item label="专业"><el-input v-model="editingForm.major" /></el-form-item>
+        <el-form-item label="显示专业"><el-input v-model="editingForm.displayMajor" placeholder="页面要求展示的专业名，空则用主修专业" /></el-form-item>
         <el-form-item label="学院"><el-input v-model="editingForm.college" /></el-form-item>
         <el-form-item label="学历">
-          <el-select v-model="editingForm.degree">
-            <el-option label="大专" value="大专" />
-            <el-option label="本科" value="本科" />
-            <el-option label="硕士" value="硕士" />
+          <el-select v-model="editingForm.educationLevel" allow-create filterable placeholder="请选择或输入">
+            <el-option label="高中" value="高中" />
+            <el-option label="大学本科" value="大学本科" />
             <el-option label="硕士研究生" value="硕士研究生" />
             <el-option label="博士" value="博士" />
           </el-select>
         </el-form-item>
+        <el-form-item label="学位">
+          <el-select v-model="editingForm.academicDegree" allow-create filterable placeholder="请选择或输入">
+            <el-option label="学士" value="学士" />
+            <el-option label="硕士" value="硕士" />
+            <el-option label="博士" value="博士" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="学号"><el-input v-model="editingForm.studentNumber" /></el-form-item>
+        <el-form-item label="学习形式"><el-input v-model="editingForm.studyMode" placeholder="如 全国普通高等院校全日制" /></el-form-item>
+        <el-form-item label="录取批次"><el-input v-model="editingForm.admissionBatch" placeholder="如 本科第一批" /></el-form-item>
         <el-form-item label="开始时间"><el-input v-model="editingForm.startDate" placeholder="标准格式如 2021-09-01，插件会按页面要求格式化" /></el-form-item>
         <el-form-item label="结束时间"><el-input v-model="editingForm.endDate" placeholder="标准格式如 2025-06-30" /></el-form-item>
         <el-form-item label="GPA"><el-input v-model="editingForm.gpa" placeholder="如 3.5/4" /></el-form-item>
-        <el-form-item label="成绩排名"><el-input v-model="editingForm.rank" placeholder="如 前20%" /></el-form-item>
+        <el-form-item label="成绩排名"><el-input v-model="editingForm.rank" placeholder="如 前30%" /></el-form-item>
+        <el-form-item label="主修课程"><el-input v-model="editingForm.courses" type="textarea" :rows="3" placeholder="课程及成绩，如 矩阵分析（87）" /></el-form-item>
         <el-form-item label="导师"><el-input v-model="editingForm.advisor" /></el-form-item>
         <el-form-item label="实验室"><el-input v-model="editingForm.lab" /></el-form-item>
         <el-form-item label="研究方向"><el-input v-model="editingForm.researchDirection" /></el-form-item>

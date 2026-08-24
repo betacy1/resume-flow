@@ -17,6 +17,8 @@ export const MessageType = {
   PANEL_STATE: 'PANEL_STATE',
   /** API 代理（content → background，避免网页上下文 CORS/混合内容限制） */
   API_PROXY: 'API_PROXY',
+  /** 登录（面板 → background，成功后写入 token） */
+  LOGIN: 'LOGIN',
   /** 查询同步状态（popup → background） */
   SYNC_STATUS: 'SYNC_STATUS',
   /** 触发全量同步（popup → background） */

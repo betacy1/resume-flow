@@ -50,6 +50,8 @@ public class DemoDataInitializer implements CommandLineRunner {
     private final ContentVariantRepository contentVariantRepository;
     private final TemplateExperienceConfigRepository templateConfigRepository;
     private final ProfileSyncStateRepository syncStateRepository;
+    private final FamilyMemberRepository familyMemberRepository;
+    private final EmergencyContactRepository emergencyContactRepository;
     private final ProfileVersionService versionService;
     private final PasswordEncoder passwordEncoder;
     private final TransactionTemplate transactionTemplate;
@@ -187,11 +189,15 @@ public class DemoDataInitializer implements CommandLineRunner {
         if (contentVariantRepository.countByUserIdAndDeletedFalse(userId) > 0
                 && contentVariantRepository.countByUserIdAndJobDirectionNotNullAndDeletedFalse(userId) > 0
                 && templateConfigRepository.countByUserIdAndDeletedFalse(userId) > 0
-                && contentVariantRepository.countByUserIdAndSourceTypeAndDeletedFalse(userId, "skill") > 0) {
-            log.info("demo 用户数据已初始化（含岗位方向维度版本、模板经历配置与专业技能版本），跳过");
+                && contentVariantRepository.countByUserIdAndSourceTypeAndDeletedFalse(userId, "skill") > 0
+                && customFieldRepository.findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(userId).stream()
+                        .anyMatch(f -> "language_type".equals(f.getFieldKey()))
+                && familyMemberRepository.countByUserIdAndDeletedFalse(userId) >= 2) {
+            log.info("demo 用户数据已初始化（含岗位方向维度版本、模板经历配置、专业技能版本、新增字段与家庭成员），跳过");
             return;
         }
 
+        log.info("旧库升级（缺少新增字段/内容版本）：清理后重建 demo 用户业务数据");
         log.info("开始初始化 demo 用户简历数据 (userId={})", userId);
         cleanup(userId);
         initProfile(userId);
@@ -200,6 +206,8 @@ public class DemoDataInitializer implements CommandLineRunner {
         List<ProjectExperience> projects = initProjects(userId);
         initAwards(userId);
         initSkills(userId);
+        initFamily(userId);
+        initEmergencyContact(userId);
         Map<String, ApplicationTemplate> templates = initTemplates(userId);
         Map<String, AnswerMaterial> materials = initMaterials(userId);
         initCustomFields(userId, internships, projects, materials);
@@ -207,7 +215,7 @@ public class DemoDataInitializer implements CommandLineRunner {
         initSkillVariants(userId, templates);
         initTemplateConfigs(userId, templates, internships, projects);
         versionService.rebuild(userId);
-        log.info("demo 用户数据初始化完成：2 段教育经历、3 条实习、6 个项目、4 个模板、内容版本 {} 条",
+        log.info("demo 用户数据初始化完成：3 段教育经历、3 条实习、6 个项目、4 个模板、内容版本 {} 条",
                 contentVariantRepository.countByUserIdAndDeletedFalse(userId));
     }
 
@@ -223,6 +231,8 @@ public class DemoDataInitializer implements CommandLineRunner {
         projectRepository.deleteByUserId(userId);
         internshipRepository.deleteByUserId(userId);
         educationRepository.deleteByUserId(userId);
+        familyMemberRepository.deleteByUserId(userId);
+        emergencyContactRepository.deleteByUserId(userId);
         syncStateRepository.deleteByUserId(userId);
     }
 
@@ -241,16 +251,20 @@ public class DemoDataInitializer implements CommandLineRunner {
         profile.setQq("2318402884");
         profile.setWechat("15128278966");
         profile.setCurrentLocation("中国大陆 / 北京 / 北京市");
-        profile.setPoliticalStatus(null);
-        profile.setApplicantType("应届毕业生");
+        profile.setPoliticalStatus("共青团员");
+        profile.setIdCard("130681200010281261");
+        profile.setEmergencyContact("张巍");
+        profile.setEmergencyPhone("13932241704");
+        profile.setFamilyMembers("父亲：胡林喜，电话 13623225862；紧急联络人：张巍，电话 13932241704");
+        profile.setApplicantType("境内院校中国籍2027届应届毕业生");
         profile.setTargetPosition("AI应用工程师");
-        profile.setTargetCity("北京");
+        profile.setTargetCity("北京市");
         profile.setAcceptOtherCity("是");
         profile.setSchool("北京理工大学");
         profile.setMajor("新一代电子信息技术");
         profile.setDegree("硕士研究生");
-        profile.setGraduationDate("2027-06-30");
-        profile.setExpectedCity("北京");
+        profile.setGraduationDate("2027-07-01");
+        profile.setExpectedCity("北京市");
         profile.setExpectedPosition("后端开发 / AI应用工程师 / 金融科技");
         profile.setSelfIntroduction(SELF_EVALUATION);
         userProfileRepository.save(profile);
@@ -262,18 +276,26 @@ public class DemoDataInitializer implements CommandLineRunner {
         EducationExperience master = new EducationExperience();
         master.setUserId(userId);
         master.setSchool("北京理工大学");
-        master.setSchoolTags("985、211、双一流");
+        master.setSchoolTags("985 / 211 / 双一流");
+        master.setStudentNumber("3220242151");
+        master.setEducationLevel("硕士研究生");
+        master.setAcademicDegree("硕士");
         master.setDegree("硕士研究生");
-        master.setMajor("新一代电子信息技术");
+        master.setStudyMode("全国普通高等院校全日制");
+        master.setMajor("电子科学与技术");
+        master.setDisplayMajor("新一代电子信息技术");
         master.setCollege("集成电路与电子学院");
-        master.setStartDate("2024-09-01");
+        master.setStartDate("2025-09-01");
         master.setEndDate("2027-06-30");
         master.setGpa("3.5/4");
-        master.setRank("前20%");
+        master.setRank("前30%");
         master.setAdvisor("王业亮");
         master.setLab("电工电子国家级实验室教学示范中心");
         master.setResearchDirection("Java后端、分布式系统、云原生");
         master.setThesis("面向无线电池管理系统的监测数据异常检测与纠错方法研究");
+        master.setCourses("群智感知技术与安全（92）；基于 ARM 的嵌入式系统基础与应用（92）；"
+                + "人工智能与大数据综合实战（86）；医学信号处理（86）；集成电路设计实践（90）；"
+                + "光电传感基础（97）；矩阵分析（87）；新时代中国特色社会主义理论与实践（90）");
         master.setHonors("北京理工大学研究生学业一等奖学金2次");
         master.setIsDefault(true);
         master.setSortOrder(0);
@@ -282,21 +304,39 @@ public class DemoDataInitializer implements CommandLineRunner {
         EducationExperience bachelor = new EducationExperience();
         bachelor.setUserId(userId);
         bachelor.setSchool("河北工业大学");
-        bachelor.setSchoolTags("211、双一流");
+        bachelor.setSchoolTags("211 / 双一流");
+        bachelor.setStudentNumber("183995");
+        bachelor.setEducationLevel("大学本科");
+        bachelor.setAcademicDegree("学士");
         bachelor.setDegree("本科");
-        bachelor.setMajor("电子信息工程 / 人工智能");
+        bachelor.setStudyMode("普通全日制");
+        bachelor.setMajor("电子信息工程");
         bachelor.setCollege("电子信息工程学院");
         bachelor.setStartDate("2018-09-01");
-        bachelor.setEndDate("2022-06-28");
+        bachelor.setEndDate("2022-06-30");
         bachelor.setGpa("3/4");
+        bachelor.setAdmissionBatch("本科第一批");
         bachelor.setAdvisor("邱波");
         bachelor.setLab("电子与通信工程国家级实验教学示范中心");
         bachelor.setResearchDirection("软硬件协同时序数据处理");
         bachelor.setThesis("LAMOST光谱参数测量模式识别方法对比研究");
+        bachelor.setCourses("深度学习（92）；智能传感器（88）；数学建模（96）；Python程序设计（96）；"
+                + "电路与电子线路基础（92）；模式识别（90）；智能数据挖掘（98）；单片机应用系统综合实践（89）");
         bachelor.setHonors("校学生会优秀部长");
         bachelor.setIsDefault(false);
         bachelor.setSortOrder(1);
         educationRepository.save(bachelor);
+
+        EducationExperience highSchool = new EducationExperience();
+        highSchool.setUserId(userId);
+        highSchool.setSchool("河北省高碑店市第一中学");
+        highSchool.setEducationLevel("高中");
+        highSchool.setDegree("高中");
+        highSchool.setStartDate("2015-09-01");
+        highSchool.setEndDate("2018-06-30");
+        highSchool.setIsDefault(false);
+        highSchool.setSortOrder(2);
+        educationRepository.save(highSchool);
     }
 
     // ==================== 实习经历 ====================
@@ -307,12 +347,12 @@ public class DemoDataInitializer implements CommandLineRunner {
 
     private List<InternshipExperience> initInternships(Long userId) {
         List<InternshipDef> defs = List.of(
-                new InternshipDef("中国工商银行北京市分行", "移动金融建设部", "金融科技", "2026-07-01", "2026-08-31",
+                new InternshipDef("中国工商银行北京市分行移动金融建设部", "移动金融建设部", "金融科技岗", "2026-07-01", "2026-08-31",
                         "Java / Spring Boot / JPA / Redis / Vue3 / TypeScript / Vite / PaaS / Harbor / Apollo / ETCD / HAProxy / RESTful API",
                         "参与研发企业级 DevOps 一体化交付平台，围绕持续交付、精准出版、自动投验、生产发布、环境路由切换、任务审计及存量系统跨集群批量迁移等场景，负责后端领域建模、接口设计、基础设施客户端封装及发布任务可靠性建设，推动交付流程标准化、自动化与可追溯。",
                         "形成统一一体化交付入口，通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制，减少多平台切换与人工操作成本，提升发布任务可靠性与可追溯性。",
                         "工行"),
-                new InternshipDef("字节跳动", "国际支付", "AI 应用后端开发实习生", "2026-05-08", "2026-07-03",
+                new InternshipDef("字节跳动-国际支付", "国际支付", "AI应用后端开发", "2026-05-01", "2026-06-30",
                         "Go / Kitex / Thrift IDL / Redis / MySQL / TCC / MQ / RPC",
                         "参与 TikTok Pay / PIPO Wallet 国际支付账户体系后端研发，围绕越南区 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截及资产安全校验等场景建设钱包用户域能力。参与账号侧状态校验、在途交易治理、账户关闭预检查、TCC 配置化规则、Redis 流程状态缓存、MQ 异步补偿、KYC 回调乱序处理和业务幂等机制建设，提升账户操作链路稳定性与异常场景处理一致性。",
                         "沉淀统一的账户状态校验与交易治理能力，支撑 P2P 转账、账户关闭预检查等多场景复用，提升账号侧链路稳定性与异常场景处理一致性。",
@@ -341,9 +381,58 @@ public class DemoDataInitializer implements CommandLineRunner {
             entity.setShortName(def.shortName);
             entity.setIsDefault(order == 0);
             entity.setSortOrder(order++);
+            // 证明人信息：京东预填完整；工行/字节字段存在但内容为空，由用户后续补充，绝不用其他字段兑底
+            if ("京东科技".equals(def.shortName)) {
+                entity.setCertifierName("冯昱杰");
+                entity.setCertifierCompany("京东集团-京东科技");
+                entity.setCertifierPosition("软件开发工程师（正职）");
+                entity.setCertifierCompanyAndPosition("京东集团-京东科技-软件开发工程师（正职）");
+                entity.setCertifierPhone("18835068199");
+                entity.setCertifierRelation("实习证明人");
+            }
             result.add(internshipRepository.save(entity));
         }
         return result;
+    }
+
+    // ==================== 家庭成员与紧急联系人 ====================
+
+    /** 家庭成员：父亲/母亲两条完整记录（family_member 结构化存储，与紧急联系人分别独立维护） */
+    private void initFamily(Long userId) {
+        FamilyMember father = new FamilyMember();
+        father.setUserId(userId);
+        father.setRelation("父亲");
+        father.setName("胡林喜");
+        father.setCompany("涿州市凌云股份有限公司");
+        father.setPosition("技术员");
+        father.setPhone("13623225862");
+        father.setAddress("河北省保定市涿州市学校路育才家园2号楼一单元4层");
+        father.setSortOrder(0);
+        familyMemberRepository.save(father);
+
+        FamilyMember mother = new FamilyMember();
+        mother.setUserId(userId);
+        mother.setRelation("母亲");
+        mother.setName("张巍");
+        mother.setCompany("涿州市松林店中学");
+        mother.setPosition("教师");
+        mother.setPhone("13932241704");
+        mother.setAddress("河北省保定市涿州市学校路育才家园2号楼一单元4层");
+        mother.setSortOrder(1);
+        familyMemberRepository.save(mother);
+    }
+
+    /** 紧急联系人：母亲张巍（与 family_member 中的母亲记录分别维护） */
+    private void initEmergencyContact(Long userId) {
+        EmergencyContact contact = new EmergencyContact();
+        contact.setUserId(userId);
+        contact.setName("张巍");
+        contact.setRelation("母亲");
+        contact.setPhone("13932241704");
+        contact.setCompany("涿州市松林店中学");
+        contact.setPosition("教师");
+        contact.setAddress("河北省保定市涿州市学校路育才家园2号楼一单元4层");
+        emergencyContactRepository.save(contact);
     }
 
     // ==================== 项目经历 ====================
@@ -418,10 +507,14 @@ public class DemoDataInitializer implements CommandLineRunner {
 
     private void initAwards(Long userId) {
         String[][] awards = {
-                {"北京理工大学研究生学业一等奖学金", "奖学金", "2024"},
-                {"北京理工大学研究生学业一等奖学金", "奖学金", "2025"},
-                {"实用新型专利《一种电池及电池内部芯片保护装置》", "专利", "2025"},
-                {"河北工业大学校学生会优秀部长", "校园荣誉", "2019"},
+                // name, type, year, level, description
+                {"北京理工大学研究生学业一等奖学金", "奖项", "2025.11", "院校级", ""},
+                {"北京理工大学研究生学业一等奖学金", "奖项", "2024.11", "院校级", ""},
+                {"校学生会优秀部长", "奖项", "2019.11", "院校级", "河北工业大学校学生会主持人联合会部长"},
+                {"一种电池及电池内部芯片保护装置", "专利成果", "2025-03-26", "国家级",
+                        "实用新型专利《一种电池及电池内部芯片保护装置》；专利类型：实用新型专利；申请时间：2025年03月26日；"
+                        + "作者排名：发明人之一；专利权人：北京理工大学；授权机构：国家知识产权局；"
+                        + "代理机构：北京高沃律师事务所；依托项目：智能电芯开发（项目编号：2023B0909050004）。"},
         };
         int order = 0;
         for (String[] award : awards) {
@@ -430,6 +523,8 @@ public class DemoDataInitializer implements CommandLineRunner {
             entity.setAwardName(award[0]);
             entity.setAwardType(award[1]);
             entity.setAwardYear(award[2]);
+            entity.setAwardLevel(award[3]);
+            entity.setDescription(award[4]);
             entity.setSortOrder(order++);
             awardRepository.save(entity);
         }
@@ -689,64 +784,129 @@ public class DemoDataInitializer implements CommandLineRunner {
         List<UserCustomField> fields = new ArrayList<>();
         int order = 0;
 
-        // ---- 基础信息 ----
+        // ---- 基础信息 / 个人信息 ----
         fields.add(field(userId, "name", "姓名", "input", "基础信息", "胡宇欣",
-                List.of("姓名", "真实姓名", "full name", "name"), null));
+                List.of("姓名", "真实姓名", "中文姓名", "申请人姓名", "候选人姓名", "本人姓名",
+                        "full name", "chinese name", "name"), null));
         fields.add(field(userId, "gender", "性别", "input", "基础信息", "女",
-                List.of("性别", "gender"), null));
+                List.of("性别", "gender", "sex"), null));
+        fields.add(field(userId, "age", "年龄", "input", "基础信息", "25岁",
+                List.of("年龄", "age"), null));
+        fields.add(field(userId, "birth_date", "出生日期", "input", "基础信息", "2000-10-28",
+                List.of("出生日期", "出生年月", "出生年月日", "生日", "birth date", "birthday",
+                        "date of birth", "dob"), null));
         fields.add(field(userId, "phone", "手机号", "input", "基础信息", "18813108802",
-                List.of("手机", "手机号", "电话", "联系方式", "mobile", "phone", "tel"), null));
+                List.of("手机", "手机号", "手机号码", "联系电话", "联系手机", "联系方式", "移动电话",
+                        "电话", "本人手机", "中国大陆手机号", "phone", "mobile", "mobile phone",
+                        "telephone", "tel"), null));
+        fields.add(field(userId, "phone_type", "手机号类型", "input", "基础信息", "中国大陆",
+                List.of("手机号类型", "手机类型", "电话类型", "phone type"), null));
         fields.add(field(userId, "email", "邮箱", "input", "基础信息", "m15128278966@163.com",
-                List.of("邮箱", "电子邮箱", "email", "mail"), null));
+                List.of("邮箱", "电子邮箱", "常用邮箱", "联系邮箱", "邮件地址", "e-mail", "email",
+                        "email address", "mail"), null));
+        fields.add(field(userId, "id_type", "证件类型", "input", "基础信息", "身份证",
+                List.of("证件类型", "证件类别", "身份证件类型", "证件种类", "id type", "document type"), null));
+        fields.add(field(userId, "id_card", "证件号码", "input", "基础信息", "130681200010281261",
+                List.of("证件号码", "证件号", "身份证号", "身份证号码", "身份证件号码", "身份证件号",
+                        "居民身份证号码", "身份证", "id number", "document number",
+                        "certificate number", "id card"), null));
+        fields.add(field(userId, "nationality", "国籍", "input", "基础信息", "中国",
+                List.of("国籍", "国籍/地区", "国家", "国家或地区", "nationality", "country", "region"), null));
+        fields.add(field(userId, "overseas_identity", "是否具有境外身份", "input", "基础信息", "否",
+                List.of("是否具有境外身份", "是否有境外身份", "境外身份", "是否港澳台侨",
+                        "是否拥有海外身份", "overseas identity"), null));
+        fields.add(field(userId, "native_place", "籍贯", "input", "基础信息", "河北省/保定市/涿州市",
+                List.of("籍贯", "祖籍", "native place", "hometown"), null));
+        fields.add(field(userId, "origin_place", "生源地", "input", "基础信息", "河北省 / 保定市 / 涿州市",
+                List.of("生源地", "生源所在地", "高考生源地", "生源省市", "source of student"), null));
+        fields.add(field(userId, "ethnicity", "民族", "input", "基础信息", "汉族",
+                List.of("民族", "ethnicity", "nation"), null));
+        fields.add(field(userId, "political_status", "政治面貌", "input", "基础信息", "共青团员",
+                List.of("政治面貌", "政治身份", "政治状态", "political status"), null));
+        fields.add(field(userId, "marital_status", "婚姻状况", "input", "基础信息", "未婚",
+                List.of("婚姻状况", "婚姻状态", "婚否", "marital status"), null));
+        fields.add(field(userId, "height", "身高", "input", "基础信息", "170",
+                List.of("身高", "身高cm", "height"), null));
+        fields.add(field(userId, "household_address", "当前户籍所在地", "input", "基础信息", "北京市 / 北京市 / 海淀区",
+                List.of("当前户籍所在地", "户籍所在地", "户口所在地", "户籍地址", "户口地址", "户籍省市区",
+                        "registered residence", "household registration"), null));
+        fields.add(field(userId, "household_type", "当前户籍类型", "input", "基础信息", "学校集体户",
+                List.of("当前户籍类型", "户籍类型", "户口类型", "户口性质", "household type"), null));
+        fields.add(field(userId, "home_address", "家庭地址", "textarea", "基础信息",
+                "河北省保定市涿州市学校路育才家园2号楼一单元4层",
+                List.of("家庭地址", "家庭住址", "通讯地址", "现居住地址", "联系地址",
+                        "home address", "address"), null));
         fields.add(field(userId, "qq", "QQ", "input", "基础信息", "2318402884",
                 List.of("QQ", "qq号"), null));
         fields.add(field(userId, "wechat", "微信", "input", "基础信息", "15128278966",
                 List.of("微信", "微信号", "wechat"), null));
         fields.add(field(userId, "current_location", "当前所在地", "input", "基础信息", "中国大陆 / 北京 / 北京市",
                 List.of("当前所在地", "现居住地", "所在地", "current location"), null));
-        fields.add(field(userId, "expected_city", "期望城市", "input", "基础信息", "北京",
-                List.of("期望城市", "意向城市", "工作城市", "expected city"), null));
-        fields.add(field(userId, "expected_position", "期望岗位", "input", "基础信息", "后端开发 / AI应用工程师 / 金融科技",
-                List.of("期望岗位", "投递岗位", "应聘岗位", "position", "job title"), null));
-        fields.add(field(userId, "political_status", "政治面貌", "input", "基础信息", "",
-                List.of("政治面貌", "政治身份"), null));
-        // 敏感类字段按要求设置为可自动填写（sensitive=false），值可后续在后台补充
-        fields.add(field(userId, "id_card", "身份证号", "input", "基础信息", "",
-                List.of("身份证", "身份证号", "证件号", "id card"), null));
-        fields.add(field(userId, "emergency_contact", "紧急联系人", "input", "基础信息", "",
-                List.of("紧急联系人", "紧急联系人姓名"), null));
-        fields.add(field(userId, "emergency_phone", "紧急联系人电话", "input", "基础信息", "",
-                List.of("紧急联系人电话", "紧急联系电话"), null));
-        fields.add(field(userId, "reference_phone", "证明人电话", "input", "基础信息", "",
+
+        // ---- 家庭情况 / 紧急联系人 ----
+        fields.add(field(userId, "emergency_contact", "紧急联系人", "input", "家庭情况", "张巍",
+                List.of("紧急联系人", "紧急联系人姓名", "紧急联络人", "紧急联络人姓名", "应急联系人",
+                        "emergency contact", "emergency contact name"), null));
+        fields.add(field(userId, "emergency_phone", "紧急联系电话", "input", "家庭情况", "13932241704",
+                List.of("紧急联系电话", "紧急联系人电话", "紧急联系人手机", "紧急联络人电话",
+                        "应急联系人电话", "emergency phone", "emergency contact phone"), null));
+        fields.add(field(userId, "relatives_in_company", "是否有近亲属在集团任职", "input", "家庭情况", "否",
+                List.of("是否有近亲属在集团任职", "是否有亲属在本单位任职", "是否有亲属在集团工作",
+                        "是否存在亲属回避", "集团内亲属", "亲属关系", "relatives in company"), null));
+        fields.add(field(userId, "father_name", "父亲姓名", "input", "家庭情况", "胡林喜",
+                List.of("父亲", "父亲姓名", "家庭成员姓名", "father", "father name"), null));
+        fields.add(field(userId, "father_phone", "父亲手机号", "input", "家庭情况", "13623225862",
+                List.of("父亲手机号", "父亲电话", "家庭成员电话", "father phone"), null));
+        fields.add(field(userId, "family_members", "家庭成员", "textarea", "家庭情况",
+                "1. 父亲：胡林喜，电话 13623225862；\n2. 紧急联络人：张巍，电话 13932241704",
+                List.of("家庭成员", "家庭情况", "家属信息"), null));
+        fields.add(field(userId, "reference_phone", "证明人电话", "input", "家庭情况", "",
                 List.of("证明人电话", "证明人联系方式", "推荐人电话"), null));
         fields.add(field(userId, "bank_card", "银行卡号", "input", "基础信息", "",
                 List.of("银行卡", "银行卡号", "银行账号"), null));
-        fields.add(field(userId, "family_members", "家庭成员", "textarea", "基础信息", "",
-                List.of("家庭成员", "家庭情况"), null));
 
-        // ---- 应聘信息 ----
-        fields.add(field(userId, "applicant_type", "应聘类型", "input", "应聘信息", "应届毕业生",
-                List.of("应届生", "应届毕业生", "应聘类型", "毕业生类别"), null));
+        // ---- 应聘信息 / 求职意向 ----
+        fields.add(field(userId, "applicant_type", "应聘类别", "input", "应聘信息", "境内院校中国籍2027届应届毕业生",
+                List.of("应聘类别", "应聘类型", "报名类别", "招聘类别", "招聘对象", "人员类别", "考生类别",
+                        "生源类别", "毕业生类别", "应届生类别", "学生类别", "申请类别", "应届生", "应届毕业生",
+                        "candidate type", "applicant type"), null));
+        fields.add(field(userId, "expected_work_city", "意向工作地点", "input", "应聘信息", "北京市",
+                List.of("意向工作地点", "期望工作地点", "期望工作城市", "意向城市", "期望城市", "工作地点",
+                        "工作城市", "求职城市", "首选城市", "第一意向城市", "第二意向城市", "可接受城市",
+                        "目标城市", "目标工作地", "期望办公地点", "工作所在地", "希望工作地点",
+                        "preferred city", "expected city", "preferred location", "work location"), null));
         fields.add(field(userId, "target_position", "目标岗位", "input", "应聘信息", "AI应用工程师",
                 List.of("目标岗位", "意向岗位", "应聘岗位"), null));
-        fields.add(field(userId, "target_city", "目标城市", "input", "应聘信息", "北京",
-                List.of("目标城市", "意向工作城市"), null));
         fields.add(field(userId, "accept_other_city", "是否接受其他城市", "input", "应聘信息", "是",
                 List.of("接受其他城市", "是否接受调剂", "接受工作地点调剂"), null));
 
+        // ---- 教育（最高学历维度） ----
+        fields.add(field(userId, "highest_education", "最高学历", "input", "教育经历", "硕士研究生",
+                List.of("最高学历", "当前学历", "最高教育程度", "education level", "degree level"), null));
+        fields.add(field(userId, "highest_degree", "最高学位", "input", "教育经历", "硕士",
+                List.of("最高学位", "degree"), null));
+        fields.add(field(userId, "study_mode", "学习形式", "input", "教育经历", "全国普通高等院校全日制",
+                List.of("学习形式", "学历类型", "培养方式", "学习方式", "是否全日制", "全日制",
+                        "education type", "study mode"), null));
+        fields.add(field(userId, "education_type", "学历类型", "input", "教育经历", "普通全日制",
+                List.of("学历类型", "学历性质"), null));
+        fields.add(field(userId, "graduation_class", "毕业届别", "input", "教育经历", "2027届",
+                List.of("毕业届别", "届别", "毕业年份", "graduation year"), null));
+
         // ---- 教育经历 ----
         fields.add(field(userId, "graduate_school", "毕业院校", "input", "教育经历", "北京理工大学",
-                List.of("毕业院校", "最高学历学校", "学校", "院校", "university", "college", "school"), null));
+                List.of("毕业院校", "最高学历学校", "university", "college"), null));
         fields.add(field(userId, "graduate_major", "专业", "input", "教育经历", "新一代电子信息技术",
-                List.of("专业", "所学专业", "major"), null));
+                List.of("主修专业", "所学专业", "第一专业", "major"), null));
         fields.add(field(userId, "graduate_degree", "学历", "input", "教育经历", "硕士研究生",
                 List.of("学历", "学位", "degree", "education"), null));
-        fields.add(field(userId, "graduation_date", "毕业时间", "input", "教育经历", "2027-06-30",
-                List.of("毕业时间", "毕业年份", "graduation", "graduate date"), null));
+        fields.add(field(userId, "graduation_date", "毕业时间", "input", "教育经历", "2027-07-01",
+                List.of("毕业时间", "毕业日期", "预计毕业时间", "预计毕业日期", "毕业年月", "graduation date",
+                        "graduate date"), null));
         fields.add(field(userId, "gpa", "GPA", "input", "教育经历", "3.5/4",
                 List.of("GPA", "绩点"), null));
-        fields.add(field(userId, "grade_rank", "成绩排名", "input", "教育经历", "前20%",
-                List.of("成绩排名", "排名"), null));
+        fields.add(field(userId, "grade_rank", "成绩排名", "input", "教育经历", "前30%",
+                List.of("成绩排名", "年级排名", "专业排名", "综合排名", "ranking"), null));
         fields.add(field(userId, "thesis", "毕业论文", "input", "教育经历", "面向无线电池管理系统的监测数据异常检测与纠错方法研究",
                 List.of("论文", "毕业论文", "研究课题"), null));
         fields.add(field(userId, "research_direction", "研究方向", "input", "教育经历", "Java后端、分布式系统、云原生",
@@ -789,6 +949,72 @@ public class DemoDataInitializer implements CommandLineRunner {
                     "project:" + project.getId()));
         }
 
+        // ---- 语言能力（语言块内字段由块匹配从这些候选取值，绝不填姓名） ----
+        fields.add(field(userId, "language_type", "语言类型", "input", "语言能力", "英语",
+                List.of("语言类型", "语种", "外语语种", "语言名称", "语言", "language"), null));
+        fields.add(field(userId, "language_proficiency", "掌握程度", "input", "语言能力", "良好",
+                List.of("掌握程度", "熟练程度", "语言水平", "英语水平", "水平", "proficiency", "level"), null));
+        fields.add(field(userId, "language_listening_speaking", "听说", "input", "语言能力", "良好",
+                List.of("听说", "听力口语", "听力与口语", "listening and speaking"), null));
+        fields.add(field(userId, "language_reading_writing", "读写", "input", "语言能力", "良好",
+                List.of("读写", "阅读写作", "阅读与写作", "reading and writing"), null));
+        fields.add(field(userId, "language_certificate", "语言证书", "input", "语言能力", "CET-6丨435分",
+                List.of("英语证书", "外语证书", "证书", "cet-6", "cet", "六级", "certificate"), null));
+        fields.add(field(userId, "language_score", "英语成绩", "input", "语言能力", "435分",
+                List.of("英语成绩", "考试成绩", "六级成绩", "分数"), null));
+        fields.add(field(userId, "language_skill_display", "技能水平展示", "input", "语言能力", "CET-6丨435分",
+                List.of("技能水平展示", "语言技能展示"), null));
+
+        // ---- 专利成果（专利块字段命中子字段关键词时填对应值，否则填完整描述） ----
+        fields.add(field(userId, "patent_full", "专利成果", "textarea", "专利成果",
+                "实用新型专利《一种电池及电池内部芯片保护装置》；专利类型：实用新型专利；申请时间：2025年03月26日；"
+                        + "作者排名：发明人之一；专利权人：北京理工大学；授权机构：国家知识产权局；"
+                        + "代理机构：北京高沃律师事务所；依托项目：智能电芯开发（项目编号：2023B0909050004）。",
+                List.of("专利成果", "科研成果", "论文专利", "知识产权", "专利", "专利名称", "成果名称",
+                        "专利题目", "patent", "research output", "patent name"), null));
+        fields.add(field(userId, "patent_type", "专利类型", "input", "专利成果", "实用新型专利",
+                List.of("专利类型", "成果类型", "patent type"), null));
+        fields.add(field(userId, "patent_apply_date", "专利申请时间", "input", "专利成果", "2025年03月26日",
+                List.of("申请时间", "申请日期", "patent application date"), null));
+        fields.add(field(userId, "patent_author_rank", "作者排名", "input", "专利成果", "发明人之一",
+                List.of("作者排名", "发明人排名", "patent author ranking", "author ranking"), null));
+        fields.add(field(userId, "patent_owner", "专利权人", "input", "专利成果", "北京理工大学",
+                List.of("专利权人", "权利人", "patent owner"), null));
+        fields.add(field(userId, "patent_grant_org", "授权机构", "input", "专利成果", "国家知识产权局",
+                List.of("授权机构", "授权单位", "颁发机构"), null));
+        fields.add(field(userId, "patent_agency", "代理机构", "input", "专利成果", "北京高沃律师事务所",
+                List.of("代理机构", "patent agency"), null));
+        fields.add(field(userId, "patent_project", "依托项目", "input", "专利成果",
+                "智能电芯开发（项目编号：2023B0909050004）",
+                List.of("依托项目", "项目来源", "supporting project"), null));
+
+        // ---- 个人简介 / 科研经历 / 校园经历 ----
+        fields.add(field(userId, "personal_summary", "个人简介", "textarea", "开放题",
+                "具备 Java 后端与 Go 微服务研发经验，拥有工商银行北京市分行金融科技岗、字节跳动国际支付后端、"
+                        + "京东科技后端研发经历。熟悉 Spring Boot、Kitex、MySQL、Redis、gRPC、TCC、MQ，"
+                        + "具备持续交付平台、支付账户治理、AI 应用工程化及复杂业务状态建模经验。",
+                List.of("个人简介", "个人介绍", "个人概述", "个人描述", "自我介绍", "简介",
+                        "personal summary", "self introduction"), null));
+        fields.add(field(userId, "research_experience", "科研经历", "textarea", "科研经历",
+                "硕士期间参与导师课题组“智能电芯开发”项目，聚焦电池及内部芯片保护技术研发，参与系统方案设计与实现，"
+                        + "作为发明人之一申请实用新型专利《一种电池及电池内部芯片保护装置》（2025.03），"
+                        + "具备一定科研能力与工程实践经验。",
+                List.of("科研经历", "科研情况", "科研能力", "研究经历", "research experience"), null));
+        fields.add(field(userId, "campus_experience", "校园经历", "textarea", "校园经历",
+                "1、担任河北工业大学校学生会主持人联合会部长：主持十佳大学生、红旗团支部评比、十佳社团评比等校级重点活动，"
+                        + "统筹活动现场流程把控与主持工作；负责跨部门对接、沟通活动流程、协商执行方案；主导部门纳新工作，"
+                        + "策划面试考核方案，完成候选人筛选及新人培训工作。\n"
+                        + "2、担任河北工业大学电子信息工程学院院学生会学研部部员：策划并组织学科竞赛专题讲座，统筹讲师对接、"
+                        + "宣传推广、主持等工作，助力同学备赛；负责学院期中考试统筹工作，参与考场安排、考务人员调配、试卷整理；"
+                        + "策划并举办图书沙龙活动，组织同学交流，营造学术文化氛围。\n"
+                        + "3、志愿服务：疫情期间参与社区志愿服务，协助信息登记及核酸检测工作；参与社会实践基地植树活动，"
+                        + "具备良好的责任意识与团队协作精神。\n"
+                        + "4、文体活动：参加北京理工大学校园马拉松长跑比赛，位次前十；参与校运会开幕式方阵，完成举旗礼仪任务；"
+                        + "日常热爱羽毛球、乒乓球等运动，经常参与学院组织的球类交流活动；拉丁舞三级（银牌），具备较强的自律意识、"
+                        + "组织纪律性和抗压能力。",
+                List.of("校园经历", "校园活动", "在校经历", "社团经历", "学生工作经历", "课外经历",
+                        "campus experience"), null));
+
         // ---- 开放题 ----
         fields.add(field(userId, "self_evaluation", "自我评价", "textarea", "开放题",
                 SELF_EVALUATION, List.of("自我评价", "个人评价", "综合评价", "个人优势", "个人总结"),
@@ -800,7 +1026,8 @@ public class DemoDataInitializer implements CommandLineRunner {
                 CAREER_PLAN, List.of("职业规划", "未来规划", "发展方向"),
                 ref(materials.get("CAREER_PLAN"))));
         fields.add(field(userId, "hobbies", "兴趣特长", "textarea", "开放题",
-                HOBBY, List.of("兴趣特长", "爱好特长", "个人特长"),
+                "羽毛球、乒乓球、校园马拉松、主持、拉丁舞。",
+                List.of("兴趣特长", "爱好特长", "个人特长", "兴趣爱好"),
                 ref(materials.get("HOBBY"))));
         fields.add(field(userId, "additional_info", "补充信息", "textarea", "开放题",
                 "", List.of("补充信息", "其他信息", "其他相关信息"), null));
@@ -811,7 +1038,7 @@ public class DemoDataInitializer implements CommandLineRunner {
                 WHY_POSITION, List.of("为什么选择该岗位", "岗位理解", "应聘原因"),
                 ref(materials.get("WHY_POSITION"))));
 
-        // ---- 专业技能（非敏感，供插件自动填写；字段名命中技能关键词时优先走技能版本匹配） ----
+        // ---- 专业技能（供插件自动填写；字段名命中技能关键词时优先走技能版本匹配） ----
         for (String[] group : SKILL_GROUPS) {
             fields.add(field(userId, group[0], group[1], "textarea", "专业技能", group[2],
                     SKILL_MATCH_KEYWORDS, null));
@@ -823,7 +1050,15 @@ public class DemoDataInitializer implements CommandLineRunner {
         fields.add(field(userId, "skill_keywords", "技能关键词", "input", "专业技能",
                 "Java / Go / Spring Boot / Redis / MySQL / gRPC / MQ / RAG / Agent", SKILL_MATCH_KEYWORDS, null));
 
+        // 幂等：已存在的 fieldKey 不重复创建（旧库补建场景），全量重建时表已清空不受影响
+        java.util.Set<String> existingKeys = customFieldRepository
+                .findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(userId).stream()
+                .map(UserCustomField::getFieldKey)
+                .collect(java.util.stream.Collectors.toSet());
         for (UserCustomField f : fields) {
+            if (existingKeys.contains(f.getFieldKey())) {
+                continue;
+            }
             f.setSortOrder(order++);
             customFieldRepository.save(f);
         }
@@ -1629,8 +1864,8 @@ public class DemoDataInitializer implements CommandLineRunner {
                             JD_GE_COMB1000_BACKEND, JD_GE_COMB1000_AI)));
 
     private static final Map<String, InternshipTpl> INTERN_TPL = Map.of(
-            "中国工商银行北京市分行", ICBC_TPL,
-            "字节跳动", BYTE_TPL,
+            "中国工商银行北京市分行移动金融建设部", ICBC_TPL,
+            "字节跳动-国际支付", BYTE_TPL,
             "京东集团-京东科技", JD_TPL);
 
     // ==================== 项目内容模板（通用受众；描述/职责/成果/技术栈 + 合并型四档） ====================

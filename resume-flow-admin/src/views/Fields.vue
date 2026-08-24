@@ -21,9 +21,6 @@
       <el-table-column label="匹配关键词">
         <template #default="{ row }">{{ (row.matchKeywords || []).join(' / ') }}</template>
       </el-table-column>
-      <el-table-column label="敏感" width="80">
-        <template #default="{ row }"><el-tag :type="row.sensitive ? 'danger' : 'info'">{{ row.sensitive ? '是' : '否' }}</el-tag></template>
-      </el-table-column>
       <el-table-column label="启用" width="80">
         <template #default="{ row }">
           <el-switch :model-value="row.enabled" @change="(v:boolean)=>toggleEnabled(row, v)" />
@@ -72,7 +69,6 @@
             style="width:100%;"
           />
         </el-form-item>
-        <el-form-item label="敏感字段"><el-switch v-model="editingForm.sensitive" /></el-form-item>
         <el-form-item label="启用"><el-switch v-model="editingForm.enabled" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="editingForm.sortOrder" :min="0" /></el-form-item>
       </el-form>
@@ -126,7 +122,6 @@ function openDialog(row?: UserCustomFieldDTO) {
     Object.assign(editingForm, {
       fieldType: 'input',
       fieldCategory: '基础信息',
-      sensitive: false,
       enabled: true,
       sortOrder: 0,
     });

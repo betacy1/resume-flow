@@ -116,4 +116,36 @@ public class ProfileController {
         profileService.deleteAward(id);
         return Result.success();
     }
+
+    // ========== 家庭成员 ==========
+
+    @Operation(summary = "保存/新增家庭成员")
+    @PostMapping("/family")
+    public Result<Void> saveFamilyMember(@Valid @RequestBody FamilyMemberDTO dto) {
+        profileService.saveFamilyMember(dto);
+        return Result.success();
+    }
+
+    @Operation(summary = "删除家庭成员")
+    @DeleteMapping("/family/{id}")
+    public Result<Void> deleteFamilyMember(@PathVariable Long id) {
+        profileService.deleteFamilyMember(id);
+        return Result.success();
+    }
+
+    // ========== 紧急联系人 ==========
+
+    @Operation(summary = "保存/新增紧急联系人")
+    @PostMapping("/emergency-contact")
+    public Result<Void> saveEmergencyContact(@Valid @RequestBody EmergencyContactDTO dto) {
+        profileService.saveEmergencyContact(dto);
+        return Result.success();
+    }
+
+    @Operation(summary = "删除紧急联系人")
+    @DeleteMapping("/emergency-contact/{id}")
+    public Result<Void> deleteEmergencyContact(@PathVariable Long id) {
+        profileService.deleteEmergencyContact(id);
+        return Result.success();
+    }
 }

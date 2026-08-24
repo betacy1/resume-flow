@@ -96,7 +96,8 @@ public class UserCustomFieldService {
         dto.setManualFillEnabled(entity.getManualFillEnabled());
         dto.setVersion(entity.getVersion());
         dto.setSourceRef(entity.getSourceRef());
-        dto.setSensitive(entity.getSensitive());
+        // 已废弃敏感字段概念：个人自用场景，统一返回 false，仅保留字段兼容旧版插件/后台协议
+        dto.setSensitive(false);
         dto.setEnabled(entity.getEnabled());
         dto.setSortOrder(entity.getSortOrder());
         dto.setUpdateTime(entity.getUpdateTime());
@@ -146,7 +147,8 @@ public class UserCustomFieldService {
         entity.setAutoFillEnabled(dto.getAutoFillEnabled() == null || dto.getAutoFillEnabled());
         entity.setManualFillEnabled(dto.getManualFillEnabled() == null || dto.getManualFillEnabled());
         entity.setSourceRef(dto.getSourceRef());
-        entity.setSensitive(Boolean.TRUE.equals(dto.getSensitive()));
+        // 已废弃敏感字段概念：无论前端传什么，一律按普通字段保存（数据库列保留，恒为 false）
+        entity.setSensitive(false);
         entity.setEnabled(dto.getEnabled() == null || dto.getEnabled());
         entity.setSortOrder(dto.getSortOrder() == null ? 0 : dto.getSortOrder());
     }

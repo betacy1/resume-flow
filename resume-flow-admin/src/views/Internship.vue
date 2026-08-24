@@ -34,6 +34,15 @@
         <el-form-item label="是否默认"><el-switch v-model="editingForm.isDefault" /></el-form-item>
         <el-form-item label="经历描述"><el-input v-model="editingForm.description" type="textarea" :rows="6" /></el-form-item>
         <el-form-item label="亮点成果"><el-input v-model="editingForm.highlights" type="textarea" :rows="3" /></el-form-item>
+        <el-divider content-position="left">证明人信息（跟随本段实习，空字段插件端显示“未填写”）</el-divider>
+        <el-form-item label="证明人姓名"><el-input v-model="editingForm.certifierName" /></el-form-item>
+        <el-form-item label="证明人单位"><el-input v-model="editingForm.certifierCompany" /></el-form-item>
+        <el-form-item label="证明人职务"><el-input v-model="editingForm.certifierPosition" /></el-form-item>
+        <el-form-item label="单位及职务"><el-input v-model="editingForm.certifierCompanyAndPosition" placeholder="如 京东集团-京东科技-软件开发工程师（正职）" /></el-form-item>
+        <el-form-item label="联系电话"><el-input v-model="editingForm.certifierPhone" /></el-form-item>
+        <el-form-item label="证明人邮箱"><el-input v-model="editingForm.certifierEmail" /></el-form-item>
+        <el-form-item label="与本人关系"><el-input v-model="editingForm.certifierRelation" placeholder="如 实习证明人" /></el-form-item>
+        <el-form-item label="证明人备注"><el-input v-model="editingForm.certifierRemark" /></el-form-item>
         <el-form-item label="模板展示">
           <div style="color: #909399; font-size: 12px">各模板下的展示/自动填充/优先级请在“岗位模板管理 → 经历配置”中设置，实习经历本身不会被删除或排除</div>
         </el-form-item>

@@ -8,7 +8,6 @@
       <el-table-column prop="matchedCount" label="匹配数" width="80" />
       <el-table-column prop="filledCount" label="填写数" width="80" />
       <el-table-column prop="skippedCount" label="跳过" width="80" />
-      <el-table-column prop="sensitiveCount" label="敏感" width="80" />
       <el-table-column prop="status" label="状态" width="80" />
       <el-table-column prop="clientIp" label="IP" width="120" />
       <el-table-column prop="createTime" label="时间" width="180" />

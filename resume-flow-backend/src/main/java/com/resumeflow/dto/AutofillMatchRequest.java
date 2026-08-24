@@ -44,5 +44,11 @@ public class AutofillMatchRequest {
         private Integer wordLimit;
         private Boolean visible;
         private Boolean disabled;
+        /** 所属重复块类型：internship（工作/实习经历）/ project（项目经历）/ language（语言能力），无块为 null */
+        private String blockType;
+        /** 所属块序号（0 起）；同一块内字段绑定同一条经历记录 */
+        private Integer blockIndex;
+        /** 所属模块标题（如“工作经历”），辅助分组与语义判定 */
+        private String sectionTitle;
     }
 }

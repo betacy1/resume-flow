@@ -28,6 +28,8 @@ public class ProfileService {
     private final ProjectExperienceRepository projectRepository;
     private final SkillProfileRepository skillRepository;
     private final AwardCertificateRepository awardRepository;
+    private final FamilyMemberRepository familyMemberRepository;
+    private final EmergencyContactRepository emergencyContactRepository;
     private final ProfileVersionService versionService;
 
     /**
@@ -62,6 +64,14 @@ public class ProfileService {
                 .findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(userId)
                 .stream().map(this::toAwardDTO).toList();
 
+        List<FamilyMemberDTO> familyList = familyMemberRepository
+                .findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(userId)
+                .stream().map(this::toFamilyDTO).toList();
+
+        List<EmergencyContactDTO> emergencyContactList = emergencyContactRepository
+                .findByUserIdAndDeletedFalseOrderByIdAsc(userId)
+                .stream().map(this::toEmergencyDTO).toList();
+
         return ProfileVO.builder()
                 .basicInfo(basicInfo)
                 .educationList(educationList)
@@ -69,6 +79,8 @@ public class ProfileService {
                 .projectList(projectList)
                 .skillList(skillList)
                 .awardList(awardList)
+                .familyList(familyList)
+                .emergencyContactList(emergencyContactList)
                 .build();
     }
 
@@ -137,6 +149,13 @@ public class ProfileService {
         entity.setCollege(dto.getCollege());
         entity.setStartDate(dto.getStartDate());
         entity.setEndDate(dto.getEndDate());
+        entity.setStudentNumber(dto.getStudentNumber());
+        entity.setEducationLevel(dto.getEducationLevel());
+        entity.setAcademicDegree(dto.getAcademicDegree());
+        entity.setStudyMode(dto.getStudyMode());
+        entity.setCourses(dto.getCourses());
+        entity.setAdmissionBatch(dto.getAdmissionBatch());
+        entity.setDisplayMajor(dto.getDisplayMajor());
         entity.setGpa(dto.getGpa());
         entity.setRank(dto.getRank());
         entity.setAdvisor(dto.getAdvisor());
@@ -189,6 +208,15 @@ public class ProfileService {
         entity.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
         entity.setAudienceExclude(dto.getAudienceExclude());
         entity.setTemplatePriority(dto.getTemplatePriority());
+        // 证明人信息：每段实习默认都有的标准字段，允许为空（空字段不参与自动填充）
+        entity.setCertifierName(dto.getCertifierName());
+        entity.setCertifierCompany(dto.getCertifierCompany());
+        entity.setCertifierPosition(dto.getCertifierPosition());
+        entity.setCertifierCompanyAndPosition(dto.getCertifierCompanyAndPosition());
+        entity.setCertifierPhone(dto.getCertifierPhone());
+        entity.setCertifierEmail(dto.getCertifierEmail());
+        entity.setCertifierRelation(dto.getCertifierRelation());
+        entity.setCertifierRemark(dto.getCertifierRemark());
         internshipRepository.save(entity);
         versionService.bump(userId);
     }
@@ -298,6 +326,7 @@ public class ProfileService {
         entity.setAwardName(dto.getAwardName());
         entity.setAwardType(dto.getAwardType());
         entity.setAwardYear(dto.getAwardYear());
+        entity.setAwardLevel(dto.getAwardLevel());
         entity.setDescription(dto.getDescription());
         entity.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
         awardRepository.save(entity);
@@ -312,6 +341,83 @@ public class ProfileService {
                 .orElseThrow(() -> new BusinessException("奖项不存在"));
         entity.setDeleted(true);
         awardRepository.save(entity);
+        versionService.bump(userId);
+    }
+
+    // ========== 家庭成员 ==========
+
+    @Transactional
+    public void saveFamilyMember(FamilyMemberDTO dto) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        FamilyMember entity;
+        if (dto.getId() != null) {
+            entity = familyMemberRepository.findById(dto.getId())
+                    .filter(e -> e.getUserId().equals(userId) && !Boolean.TRUE.equals(e.getDeleted()))
+                    .orElseThrow(() -> new BusinessException("家庭成员不存在"));
+        } else {
+            entity = new FamilyMember();
+            entity.setUserId(userId);
+        }
+        entity.setRelation(dto.getRelation());
+        entity.setName(dto.getName());
+        entity.setCompany(dto.getCompany());
+        entity.setPosition(dto.getPosition());
+        entity.setPhone(dto.getPhone());
+        entity.setEmail(dto.getEmail());
+        entity.setPoliticalStatus(dto.getPoliticalStatus());
+        entity.setAddress(dto.getAddress());
+        entity.setRemark(dto.getRemark());
+        entity.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
+        entity.setEnabled(dto.getEnabled() != null ? dto.getEnabled() : true);
+        familyMemberRepository.save(entity);
+        versionService.bump(userId);
+    }
+
+    @Transactional
+    public void deleteFamilyMember(Long id) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        FamilyMember entity = familyMemberRepository.findById(id)
+                .filter(e -> e.getUserId().equals(userId) && !Boolean.TRUE.equals(e.getDeleted()))
+                .orElseThrow(() -> new BusinessException("家庭成员不存在"));
+        entity.setDeleted(true);
+        familyMemberRepository.save(entity);
+        versionService.bump(userId);
+    }
+
+    // ========== 紧急联系人 ==========
+
+    @Transactional
+    public void saveEmergencyContact(EmergencyContactDTO dto) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        EmergencyContact entity;
+        if (dto.getId() != null) {
+            entity = emergencyContactRepository.findById(dto.getId())
+                    .filter(e -> e.getUserId().equals(userId) && !Boolean.TRUE.equals(e.getDeleted()))
+                    .orElseThrow(() -> new BusinessException("紧急联系人不存在"));
+        } else {
+            entity = new EmergencyContact();
+            entity.setUserId(userId);
+        }
+        entity.setName(dto.getName());
+        entity.setRelation(dto.getRelation());
+        entity.setPhone(dto.getPhone());
+        entity.setCompany(dto.getCompany());
+        entity.setPosition(dto.getPosition());
+        entity.setAddress(dto.getAddress());
+        entity.setRemark(dto.getRemark());
+        entity.setEnabled(dto.getEnabled() != null ? dto.getEnabled() : true);
+        emergencyContactRepository.save(entity);
+        versionService.bump(userId);
+    }
+
+    @Transactional
+    public void deleteEmergencyContact(Long id) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        EmergencyContact entity = emergencyContactRepository.findById(id)
+                .filter(e -> e.getUserId().equals(userId) && !Boolean.TRUE.equals(e.getDeleted()))
+                .orElseThrow(() -> new BusinessException("紧急联系人不存在"));
+        entity.setDeleted(true);
+        emergencyContactRepository.save(entity);
         versionService.bump(userId);
     }
 
@@ -357,6 +463,13 @@ public class ProfileService {
         dto.setCollege(e.getCollege());
         dto.setStartDate(e.getStartDate());
         dto.setEndDate(e.getEndDate());
+        dto.setStudentNumber(e.getStudentNumber());
+        dto.setEducationLevel(e.getEducationLevel());
+        dto.setAcademicDegree(e.getAcademicDegree());
+        dto.setStudyMode(e.getStudyMode());
+        dto.setCourses(e.getCourses());
+        dto.setAdmissionBatch(e.getAdmissionBatch());
+        dto.setDisplayMajor(e.getDisplayMajor());
         dto.setGpa(e.getGpa());
         dto.setRank(e.getRank());
         dto.setAdvisor(e.getAdvisor());
@@ -386,6 +499,14 @@ public class ProfileService {
         dto.setSortOrder(e.getSortOrder());
         dto.setAudienceExclude(e.getAudienceExclude());
         dto.setTemplatePriority(e.getTemplatePriority());
+        dto.setCertifierName(e.getCertifierName());
+        dto.setCertifierCompany(e.getCertifierCompany());
+        dto.setCertifierPosition(e.getCertifierPosition());
+        dto.setCertifierCompanyAndPosition(e.getCertifierCompanyAndPosition());
+        dto.setCertifierPhone(e.getCertifierPhone());
+        dto.setCertifierEmail(e.getCertifierEmail());
+        dto.setCertifierRelation(e.getCertifierRelation());
+        dto.setCertifierRemark(e.getCertifierRemark());
         return dto;
     }
 
@@ -426,8 +547,40 @@ public class ProfileService {
         dto.setAwardName(e.getAwardName());
         dto.setAwardType(e.getAwardType());
         dto.setAwardYear(e.getAwardYear());
+        dto.setAwardLevel(e.getAwardLevel());
         dto.setDescription(e.getDescription());
         dto.setSortOrder(e.getSortOrder());
+        return dto;
+    }
+
+    private FamilyMemberDTO toFamilyDTO(FamilyMember e) {
+        FamilyMemberDTO dto = new FamilyMemberDTO();
+        dto.setId(e.getId());
+        dto.setRelation(e.getRelation());
+        dto.setName(e.getName());
+        dto.setCompany(e.getCompany());
+        dto.setPosition(e.getPosition());
+        dto.setPhone(e.getPhone());
+        dto.setEmail(e.getEmail());
+        dto.setPoliticalStatus(e.getPoliticalStatus());
+        dto.setAddress(e.getAddress());
+        dto.setRemark(e.getRemark());
+        dto.setSortOrder(e.getSortOrder());
+        dto.setEnabled(e.getEnabled());
+        return dto;
+    }
+
+    private EmergencyContactDTO toEmergencyDTO(EmergencyContact e) {
+        EmergencyContactDTO dto = new EmergencyContactDTO();
+        dto.setId(e.getId());
+        dto.setName(e.getName());
+        dto.setRelation(e.getRelation());
+        dto.setPhone(e.getPhone());
+        dto.setCompany(e.getCompany());
+        dto.setPosition(e.getPosition());
+        dto.setAddress(e.getAddress());
+        dto.setRemark(e.getRemark());
+        dto.setEnabled(e.getEnabled());
         return dto;
     }
 }

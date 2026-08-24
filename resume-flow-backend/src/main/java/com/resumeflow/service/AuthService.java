@@ -27,6 +27,7 @@ public class AuthService {
     private final SysUserRepository sysUserRepository;
     private final JwtUtils jwtUtils;
     private final PasswordEncoder passwordEncoder;
+    private final DefaultStructureService defaultStructureService;
 
     /**
      * 用户注册
@@ -45,6 +46,8 @@ public class AuthService {
         user.setPhone(request.getPhone());
 
         sysUserRepository.save(user);
+        // 注册后即创建标准字段结构（家庭成员/紧急联系人/基础信息），内容由用户自己填写
+        defaultStructureService.initDefaultStructure(user.getId());
         log.info("用户注册成功: {}", request.getUsername());
     }
 

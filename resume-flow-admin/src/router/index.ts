@@ -62,6 +62,12 @@ const router = createRouter({
           meta: { title: '奖项荣誉' },
         },
         {
+          path: 'family',
+          name: 'Family',
+          component: () => import('@/views/Family.vue'),
+          meta: { title: '家庭成员' },
+        },
+        {
           path: 'variants',
           name: 'Variants',
           component: () => import('@/views/Variants.vue'),

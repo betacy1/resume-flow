@@ -28,6 +28,7 @@ public class UserCustomFieldDTO {
     private Long version;
     /** 来源引用，如 internship:1 / project:3 / material:5 */
     private String sourceRef;
+    /** 已废弃：敏感字段概念已移除，恒为 false，仅为兼容旧版插件/后台协议保留 */
     private Boolean sensitive;
     private Boolean enabled;
     private Integer sortOrder;

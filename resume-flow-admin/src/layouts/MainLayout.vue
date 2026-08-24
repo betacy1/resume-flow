@@ -37,6 +37,10 @@
           <el-icon><Trophy /></el-icon>
           <span>奖项荣誉管理</span>
         </el-menu-item>
+        <el-menu-item index="/family">
+          <el-icon><Avatar /></el-icon>
+          <span>家庭与紧急联系人</span>
+        </el-menu-item>
         <el-menu-item index="/variants">
           <el-icon><Notebook /></el-icon>
           <span>内容版本管理</span>
@@ -88,7 +92,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useRouter } from 'vue-router';
 import { authApi } from '@/api/auth';
 import {
-  HomeFilled, User, Reading, Briefcase, Files, Star, Document, Collection, List, EditPen, Trophy, Notebook, View, Refresh, Download,
+  HomeFilled, User, Reading, Briefcase, Files, Star, Document, Collection, List, EditPen, Trophy, Notebook, View, Refresh, Download, Avatar,
 } from '@element-plus/icons-vue';
 
 const authStore = useAuthStore();

@@ -22,6 +22,10 @@ public class AwardCertificate extends BaseEntity {
     @Column(name = "award_year", length = 20)
     private String awardYear;
 
+    /** 奖项级别，如 院校级 / 省部级 / 国家级 */
+    @Column(name = "award_level", length = 50)
+    private String awardLevel;
+
     @Column(name = "description", length = 500)
     private String description;
 

@@ -60,7 +60,8 @@ public class UserCustomField extends BaseEntity {
     @Column(name = "source_ref", length = 50)
     private String sourceRef;
 
-    // sensitive 是 MySQL 8.0.17+ 保留字，列名必须加反引号转义，否则自动建表/validate 报语法错误
+    // sensitive 是 MySQL 8.0.17+ 保留字，列名必须加反引号转义，否则自动建表/validate 报语法错误。
+    // 已废弃：敏感字段概念已移除（个人自用场景），数据库列保留但恒为 false，业务逻辑不再依赖。
     @Column(name = "`sensitive`", nullable = false)
     private Boolean sensitive = false;
 

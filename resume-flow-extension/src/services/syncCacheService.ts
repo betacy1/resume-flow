@@ -23,6 +23,10 @@ export interface SyncCache {
   cachedInternships: any[];
   cachedProjects: any[];
   cachedEducation: any[];
+  /** 家庭成员（父亲/母亲等，含单位/职务/电话） */
+  cachedFamilyList: any[];
+  /** 紧急联系人（与家庭成员分别独立维护） */
+  cachedEmergencyContactList: any[];
 }
 
 export async function getSyncCache(): Promise<SyncCache | null> {
@@ -50,6 +54,8 @@ export async function saveSyncCache(payload: SyncFullPayload): Promise<SyncCache
     cachedInternships: payload.internshipList || [],
     cachedProjects: payload.projectList || [],
     cachedEducation: payload.educationList || [],
+    cachedFamilyList: payload.familyList || [],
+    cachedEmergencyContactList: payload.emergencyContactList || [],
   };
   // 保留既有模板选择
   const old = await getSyncCache();

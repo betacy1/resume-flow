@@ -55,4 +55,38 @@ public class InternshipExperience extends BaseEntity {
     /** 模板优先级 JSON，如 {"bank":1,"state_owned":2}，数值越小越优先 */
     @Column(name = "template_priority", length = 255)
     private String templatePriority;
+
+    // ==================== 证明人信息（每段实习默认都有的标准字段，可为空） ====================
+
+    /** 证明人姓名 */
+    @Column(name = "certifier_name", length = 50)
+    private String certifierName;
+
+    /** 证明人单位 */
+    @Column(name = "certifier_company", length = 200)
+    private String certifierCompany;
+
+    /** 证明人职务 */
+    @Column(name = "certifier_position", length = 100)
+    private String certifierPosition;
+
+    /** 证明人单位及职务（合并展示） */
+    @Column(name = "certifier_company_and_position", length = 300)
+    private String certifierCompanyAndPosition;
+
+    /** 证明人联系电话 */
+    @Column(name = "certifier_phone", length = 30)
+    private String certifierPhone;
+
+    /** 证明人邮箱 */
+    @Column(name = "certifier_email", length = 100)
+    private String certifierEmail;
+
+    /** 证明人与本人关系：实习证明人/直接主管等 */
+    @Column(name = "certifier_relation", length = 50)
+    private String certifierRelation;
+
+    /** 证明人备注 */
+    @Column(name = "certifier_remark", length = 300)
+    private String certifierRemark;
 }

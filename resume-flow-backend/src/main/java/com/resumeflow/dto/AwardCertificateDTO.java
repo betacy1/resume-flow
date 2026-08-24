@@ -12,6 +12,8 @@ public class AwardCertificateDTO {
     private String awardName;
     private String awardType;
     private String awardYear;
+    /** 奖项级别（院校级/省部级/国家级） */
+    private String awardLevel;
     private String description;
     private Integer sortOrder;
 }

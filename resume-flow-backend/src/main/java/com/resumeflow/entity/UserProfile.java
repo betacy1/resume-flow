@@ -41,7 +41,7 @@ public class UserProfile extends BaseEntity {
     @Column(name = "political_status", length = 50)
     private String politicalStatus;
 
-    /** 身份证号（非敏感配置时可自动填写） */
+    /** 身份证号（自动填写字段，按普通字段处理） */
     @Column(name = "id_card", length = 30)
     private String idCard;
 
