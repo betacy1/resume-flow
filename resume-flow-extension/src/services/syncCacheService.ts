@@ -23,6 +23,8 @@ export interface SyncCache {
   cachedInternships: any[];
   cachedProjects: any[];
   cachedEducation: any[];
+  /** 荣誉奖项（名称/类别/时间/级别，供统一搜索） */
+  cachedAwardList: any[];
   /** 家庭成员（父亲/母亲等，含单位/职务/电话） */
   cachedFamilyList: any[];
   /** 紧急联系人（与家庭成员分别独立维护） */
@@ -54,6 +56,7 @@ export async function saveSyncCache(payload: SyncFullPayload): Promise<SyncCache
     cachedInternships: payload.internshipList || [],
     cachedProjects: payload.projectList || [],
     cachedEducation: payload.educationList || [],
+    cachedAwardList: payload.awardList || [],
     cachedFamilyList: payload.familyList || [],
     cachedEmergencyContactList: payload.emergencyContactList || [],
   };

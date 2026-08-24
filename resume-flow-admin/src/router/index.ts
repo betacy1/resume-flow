@@ -104,6 +104,12 @@ const router = createRouter({
           meta: { title: '开放题素材' },
         },
         {
+          path: 'applications',
+          name: 'Applications',
+          component: () => import('@/views/Applications.vue'),
+          meta: { title: '投递信息表' },
+        },
+        {
           path: 'logs',
           name: 'Logs',
           component: () => import('@/views/Logs.vue'),

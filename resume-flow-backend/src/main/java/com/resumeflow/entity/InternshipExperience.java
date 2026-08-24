@@ -20,6 +20,9 @@ public class InternshipExperience extends BaseEntity {
     @Column(length = 100)
     private String department;
 
+    /** 工作地点（城市） */
+    private String city;
+
     @Column(length = 100)
     private String position;
 

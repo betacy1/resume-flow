@@ -67,6 +67,8 @@ export interface InternshipExperienceDTO {
   id?: number;
   company?: string;
   department?: string;
+  /** 工作地点（城市） */
+  city?: string;
   position?: string;
   startDate?: string;
   endDate?: string;

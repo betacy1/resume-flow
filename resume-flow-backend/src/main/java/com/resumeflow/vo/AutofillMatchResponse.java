@@ -58,6 +58,10 @@ public class AutofillMatchResponse {
         private String recordName;
         /** 预览分组：work_experience / project_experience / skill / material / education / basic */
         private String group;
+        /** 疑似错误：值类型与字段语义冲突（如邮箱字段推荐“英语”），默认不勾选 */
+        private boolean suspicious;
+        /** 疑似错误原因（suspicious=true 时说明冲突点） */
+        private String suspiciousReason;
 
         public MatchResult(String fieldId,
                            String matchedFieldKey,

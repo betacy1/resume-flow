@@ -23,13 +23,15 @@ const SECTION_TITLE_MAP: Array<{ type: 'internship' | 'project' | 'language' | '
     type: 'internship',
     titles: ['工作经历', '实习经历', '工作经验', '实习经验', '任职经历', '职业经历', '从业经历',
       '社会实践', '实践经历', '工作履历', '实习履历', '工作背景', '职业背景',
+      '实习信息', '工作信息', '工作/实习经历', '工作实习经历', '实习情况',
       'work experience', 'internship experience', 'employment history', 'employment',
-      'professional experience', 'career experience'],
+      'professional experience', 'career experience', 'internship'],
   },
   {
     type: 'project',
     titles: ['项目经历', '项目经验', '项目实践', '项目介绍', '项目履历', '项目背景', '参与项目',
-      '研发项目', '项目成果', '项目情况', 'project experience', 'projects', 'project'],
+      '研发项目', '项目成果', '项目情况', '项目信息',
+      'project experience', 'projects', 'project'],
   },
   {
     type: 'education',

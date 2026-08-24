@@ -492,6 +492,9 @@ public class FieldMatchingService {
                         "内容类型约束：该字段不允许填入\"" + pick.candidate.fieldName + "\"，未匹配，需手动选择"));
                 continue;
             }
+            // 值类型强校验：邮箱/手机/姓名/语言类型等字段语义与候选值格式冲突时标记疑似错误（置信度归零，默认不勾选）
+            String typeConflict = typeConflictReason(text, field, pick.candidate);
+            boolean suspicious = typeConflict != null;
 
             // 已移除敏感字段跳过逻辑：个人自用场景，所有字段均按普通字段正常匹配与填充。
             if (!hasText(pick.candidate.value)) {
@@ -525,10 +528,17 @@ public class FieldMatchingService {
                     pick.reason,
                     variantDesc
             );
-            // 仅弱证据（无中文 label）时降级为需人工确认，避免 name/id 误判直接自动填入
+            // 仅弱证据（无中文 label）时降级为需人工确认，避免 name/id 误判直接自动填入；
+            // 类型冲突时置信度强制归零并标记疑似错误。
             if (weakOnly) {
                 result.setConfidence(Math.min(result.getConfidence(), 0.55));
                 result.setReason(result.getReason() + "（仅 name/id 弱证据，请确认）");
+            }
+            if (suspicious) {
+                result.setSuspicious(true);
+                result.setSuspiciousReason(typeConflict);
+                result.setConfidence(0);
+                result.setReason("类型校验失败：" + typeConflict);
             }
             result.setGroup(groupOf(pick.candidate));
             matches.add(result);
@@ -600,12 +610,7 @@ public class FieldMatchingService {
                 break;
             }
         }
-        // 未定位到具体经历：取第一个带日期的经历（按排序，通常为最近一段）
-        if (chosen == null) {
-            chosen = candidates.stream()
-                    .filter(c -> c.startDate != null || c.endDate != null)
-                    .findFirst().orElse(null);
-        }
+        // 未定位到具体经历：绝不随意取第一个经历的日期（会导致不同经历日期串数据），交给未匹配由用户手动选择
         if (chosen == null) {
             return null;
         }
@@ -644,7 +649,7 @@ public class FieldMatchingService {
 
         // 注意：已移除“岗位模板优先匹配”无差别兕底（会把 AI 协作等素材填入任意长文本），
         // 也移除“普通 input 默认填 name”兕底；内容类型必须强约束。
-        return fuzzyPick(text, candidates, templateId);
+        return fuzzyPick(text, field, candidates, templateId);
     }
 
     private MatchPick preciseKeywordPick(String text, List<FieldCandidate> candidates, Long templateId) {
@@ -730,7 +735,12 @@ public class FieldMatchingService {
         return null;
     }
 
-    private MatchPick fuzzyPick(String text, List<FieldCandidate> candidates, Long templateId) {
+    private MatchPick fuzzyPick(String text, FieldInfo field, List<FieldCandidate> candidates, Long templateId) {
+        // 短字段（input/select）绝不模糊匹配：字符重叠相似度对短标签极不可靠，
+        // 是“姓名/邮箱/手机号被填成英语”类误填的主要来源；模糊匹配仅限长文本（开放题/描述）。
+        if (!isLongTextField(field)) {
+            return null;
+        }
         MatchPick best = null;
         double bestScore = 0;
         for (FieldCandidate candidate : candidates) {
@@ -744,7 +754,7 @@ public class FieldMatchingService {
                 }
             }
         }
-        if (bestScore < 0.30) {
+        if (bestScore < 0.50) {
             return null;
         }
         return best;
@@ -1867,6 +1877,78 @@ public class FieldMatchingService {
             map.put("aiCollaboration", coalesce(template.getAiCollaboration(), map.get("aiCollaboration")));
         }
         return map;
+    }
+
+    // ==================== 值类型强校验（finalValidation） ====================
+
+    private static final java.util.regex.Pattern EMAIL_PATTERN = java.util.regex.Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+    private static final java.util.regex.Pattern PHONE_PATTERN = java.util.regex.Pattern.compile("^1\\d{10}$");
+    private static final java.util.regex.Pattern DATE_LIKE_PATTERN = java.util.regex.Pattern.compile("(19|20)?\\d{2}[年./-]\\d{1,2}");
+    private static final List<String> LANGUAGE_WORDS = List.of("英语", "日语", "韩语", "法语", "德语", "俄语", "西班牙语", "english", "japanese");
+    private static final List<String> LANGUAGE_CONTENT_SIGNALS = List.of("cet-4", "cet-6", "四六级", "雅思", "托福", "ielts", "toefl", "tem-4", "tem-8");
+
+    private boolean isLanguageWordValue(String value) {
+        String v = lower(value);
+        return LANGUAGE_WORDS.stream().anyMatch(v::contains);
+    }
+
+    /** 值是否为语言能力类内容（语种/等级/证书分数），禁止流入姓名/邮箱/手机/单位/职位等字段 */
+    private boolean isLanguageLikeValue(String value) {
+        if (!hasText(value) || value.length() > 30) return false;
+        String v = lower(value);
+        if (isLanguageWordValue(value)) return true;
+        return LANGUAGE_CONTENT_SIGNALS.stream().anyMatch(v::contains);
+    }
+
+    /**
+     * 值类型强校验：字段语义与候选值格式冲突时返回原因（该结果标记为疑似错误）。
+     * 仅对短字段校验；长文本（职责/描述/开放题）不校验。
+     */
+    private String typeConflictReason(String text, FieldInfo field, FieldCandidate candidate) {
+        if (isLongTextField(field)) return null;
+        String value = candidate.value;
+        if (!hasText(value)) return null;
+        String type = lower(field.getType());
+        boolean emailLike = text.contains("邮箱") || text.contains("email") || "email".equals(type);
+        boolean phoneLike = text.contains("手机") || text.contains("电话") || "tel".equals(type);
+        boolean nameLike = (text.contains("姓名") || text.contains("真实姓名"))
+                && !text.contains("证明人") && !text.contains("联系人") && !text.contains("推荐人")
+                && !text.contains("亲属") && !text.contains("成员");
+        boolean langField = text.contains("语言类型") || text.contains("语种") || text.contains("外语")
+                || text.contains("语言名称") || (text.contains("语言") && text.contains("类型"));
+
+        if (emailLike && !EMAIL_PATTERN.matcher(value.trim()).matches()) {
+            return "邮箱字段推荐值\"" + value + "\"不是邮箱格式";
+        }
+        if (phoneLike && !PHONE_PATTERN.matcher(value.trim()).matches()) {
+            return "手机号字段推荐值\"" + value + "\"不是 11 位手机号";
+        }
+        if (nameLike && !isPersonNameValue(value)) {
+            return "姓名字段推荐值\"" + value + "\"不符合姓名类型，疑似将其他分类内容误填到姓名字段";
+        }
+        if (langField && !isLanguageLikeValue(value)) {
+            return "语言类型字段推荐值\"" + value + "\"不是语种/语言能力内容";
+        }
+        // 语种与证书类值只能进语言类字段，绝不允许出现在基础信息/经历字段中（“英语”填到姓名的根因防线）
+        if (isLanguageLikeValue(value) && !langField
+                && !text.contains("水平") && !text.contains("听说") && !text.contains("读写")
+                && !text.contains("掌握") && !text.contains("成绩") && !text.contains("证书")) {
+            return "语言能力内容\"" + value + "\"不允许填入该字段（" + truncate(text, 20) + "）";
+        }
+        return null;
+    }
+
+    /** 中文姓名：2-4 个汉字（少数民族姓名放宽到 2-15 个汉字，不含数字/字母/符号） */
+    private boolean isPersonNameValue(String value) {
+        if (!hasText(value)) return false;
+        String v = value.trim();
+        if (v.length() < 2 || v.length() > 15) return false;
+        return v.matches("[\\u4e00-\\u9fa5·]+") || v.matches("[A-Za-z\\s]{2,30}");
+    }
+
+    private String truncate(String value, int max) {
+        if (value == null) return "";
+        return value.length() <= max ? value : value.substring(0, max) + "…";
     }
 
     // ==================== 工具方法 ====================

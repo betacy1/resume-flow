@@ -61,6 +61,10 @@
           <el-icon><Collection /></el-icon>
           <span>开放题素材管理</span>
         </el-menu-item>
+        <el-menu-item index="/applications">
+          <el-icon><Tickets /></el-icon>
+          <span>投递信息表</span>
+        </el-menu-item>
         <el-menu-item index="/logs">
           <el-icon><List /></el-icon>
           <span>自动填充日志</span>
@@ -92,7 +96,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useRouter } from 'vue-router';
 import { authApi } from '@/api/auth';
 import {
-  HomeFilled, User, Reading, Briefcase, Files, Star, Document, Collection, List, EditPen, Trophy, Notebook, View, Refresh, Download, Avatar,
+  HomeFilled, User, Reading, Briefcase, Files, Star, Document, Collection, List, EditPen, Trophy, Notebook, View, Refresh, Download, Avatar, Tickets,
 } from '@element-plus/icons-vue';
 
 const authStore = useAuthStore();

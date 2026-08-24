@@ -26,6 +26,7 @@
       <el-form :model="editingForm" label-width="100px">
         <el-form-item label="公司"><el-input v-model="editingForm.company" /></el-form-item>
         <el-form-item label="部门"><el-input v-model="editingForm.department" /></el-form-item>
+        <el-form-item label="工作地点"><el-input v-model="editingForm.city" placeholder="如 北京（空字段插件端显示“未填写”）" /></el-form-item>
         <el-form-item label="岗位"><el-input v-model="editingForm.position" /></el-form-item>
         <el-form-item label="简称"><el-input v-model="editingForm.shortName" placeholder="如 京东、字节" /></el-form-item>
         <el-form-item label="开始时间"><el-input v-model="editingForm.startDate" placeholder="标准格式如 2026-05-08" /></el-form-item>
@@ -44,7 +45,7 @@
         <el-form-item label="与本人关系"><el-input v-model="editingForm.certifierRelation" placeholder="如 实习证明人" /></el-form-item>
         <el-form-item label="证明人备注"><el-input v-model="editingForm.certifierRemark" /></el-form-item>
         <el-form-item label="模板展示">
-          <div style="color: #909399; font-size: 12px">各模板下的展示/自动填充/优先级请在“岗位模板管理 → 经历配置”中设置，实习经历本身不会被删除或排除</div>
+          <div style="color: #909399; font-size: 12px">各模板下的展示/自动填充/优先级请在“岗位模板管理 → 经历配置”中设置；工作职责/成果的不同字数版本（100/200/300/500/完整版）请点击列表行“版本”按钮维护</div>
         </el-form-item>
       </el-form>
       <template #footer>

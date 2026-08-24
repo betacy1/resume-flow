@@ -25,8 +25,18 @@ import {
 import { setNativeValueForElement } from '../utils/domHelper';
 import {
   ConflictError, unwrapOrConflict,
+  type ApplicationCapturePayload, type ApplicationCaptureResult,
   type AutofillMatchResponse, type CustomFieldItem, type FieldInfo, type MatchResult, type PluginFieldWriteResult,
 } from '../services/apiClient';
+import {
+  detectJobPage, installSaveActionWatcher, installUrlWatcher,
+  type JobPageDetectResult,
+} from '../services/jobPageDetectService';
+import {
+  buildSearchIndex, unifiedSearch, SEARCH_GROUP_LABELS, SEARCH_SUGGESTIONS,
+  type ScoredSearchResult, type SearchEntry, type SearchGroup,
+} from '../services/unifiedSearchService';
+import { attachResizeHandles } from '../services/panelResizeService';
 
 const HOST_ID = '__resumeflow_panel_host__';
 const Z_INDEX = '2147483647';
@@ -45,6 +55,14 @@ let state: PanelState | null = null;
 let currentCategory = '';
 /** 内容库搜索关键词 */
 let cardSearchKeyword = '';
+/** 搜索是否仅限当前分类（默认全库搜索，不受当前页签限制） */
+let searchTabOnly = false;
+/** 统一搜索本地索引：同步/字段变更后按数据版本自动重建，搜索只查本地不请求后端 */
+let searchIndex: SearchEntry[] | null = null;
+let searchIndexHash = '';
+/** 搜索防抖计时器（200ms）与结果分页上限 */
+let searchDebounceTimer: number | null = null;
+let searchResultLimit = 50;
 /** 使用偏好（最近使用 / 收藏 / 站点偏好） */
 let usage: UsageState | null = null;
 /** 撤回栈：每次填入前记录元素原值 */
@@ -200,6 +218,8 @@ async function render(): Promise<void> {
   buildPanel();
   buildMiniButton();
   applyPosition();
+  watchWindowResize();
+  applyDisplaySettings();
   await applyMinimized(!!state.minimized);
 
   if (!auth) {
@@ -213,6 +233,12 @@ async function render(): Promise<void> {
   await refreshSelections();
   renderTargetInfo();
   renderCards();
+  // 招聘页面采集：安装保存动作/SPA 路由监听，并执行一次检测与自动写入
+  installSaveActionWatcher();
+  installUrlWatcher(() => {
+    if (panelExists()) refreshApplicationTrack().catch(() => { /* 面板可能已关闭 */ });
+  });
+  await refreshApplicationTrack();
   await checkSync(false);
 }
 
@@ -225,13 +251,15 @@ function buildPanel(): void {
   const header = el('div', 'rf-header');
   header.innerHTML = `<span class="rf-title">ResumeFlow 填表助手</span>`;
   const headerBtns = el('div', 'rf-header-btns');
-  const btnWide = el('button', 'rf-icon-btn', '⤢');
-  btnWide.title = state?.wideMode ? '切换小窗模式（360px）' : '展开编辑（宽屏 640px）';
+  const btnSettings = el('button', 'rf-icon-btn', '⚙');
+  btnSettings.title = '显示设置（字号 / 行距 / 显示模式）';
+  const btnMax = el('button', 'rf-icon-btn', '□');
+  btnMax.title = state?.maximized ? '还原上次尺寸' : '最大化（窗口 90%，保留边距）';
   const btnMin = el('button', 'rf-icon-btn', '—');
   btnMin.title = '最小化';
   const btnClose = el('button', 'rf-icon-btn', '×');
-  btnClose.title = '关闭面板';
-  headerBtns.append(btnWide, btnMin, btnClose);
+  btnClose.title = '关闭面板（关闭后不自动弹出）';
+  headerBtns.append(btnSettings, btnMax, btnMin, btnClose);
   header.appendChild(headerBtns);
   panel.appendChild(header);
 
@@ -283,18 +311,30 @@ function buildPanel(): void {
   recommend.style.display = 'none';
   body.appendChild(recommend);
 
+  // 投递记录区（招聘网站页面自动采集，写入投递信息表）
+  const trackHeader = el('div', 'rf-content-header');
+  trackHeader.appendChild(el('span', 'rf-subtitle', '投递记录'));
+  const btnTrackRefresh = el('button', 'rf-btn rf-btn-tiny', '↻ 重新检测');
+  trackHeader.appendChild(btnTrackRefresh);
+  const trackBox = el('div', 'rf-track-box', '正在检测当前页面…');
+  body.append(trackHeader, trackBox);
+
   // 内容库：搜索 + 分类标签 + 内容卡片（每条可填入/编辑/复制/启停/删除）+ 新增字段表单
   const contentHeader = el('div', 'rf-content-header');
   contentHeader.appendChild(el('span', 'rf-subtitle', '内容库'));
   const btnNewField = el('button', 'rf-btn rf-btn-tiny', '+ 新增字段');
   contentHeader.appendChild(btnNewField);
   const searchInput = el('input', 'rf-search') as HTMLInputElement;
-  searchInput.placeholder = '搜索字段名 / 内容 / 关键词…';
+  searchInput.placeholder = '全库搜索：公司 / 单位 / 职位 / 时间 / 证明人 / 电话 / 项目…';
+  searchTabOnly = !!state?.searchTabOnly;
+  const scopeChk = checkboxEl('仅搜当前分类', searchTabOnly);
+  const searchRow = el('div', 'rf-search-row');
+  searchRow.append(searchInput, scopeChk.wrap);
   const tabs = el('div', 'rf-tabs');
   const newForm = el('div', 'rf-new-form');
   newForm.style.display = 'none';
   const cards = el('div', 'rf-cards');
-  body.append(contentHeader, searchInput, tabs, newForm, cards);
+  body.append(contentHeader, searchRow, tabs, newForm, cards);
 
   // 同步区
   const syncTitle = el('div', 'rf-subtitle', '数据同步');
@@ -315,14 +355,12 @@ function buildPanel(): void {
   report.style.display = 'none';
   body.appendChild(report);
 
-  // 状态提示与右下角拖拽调节手柄
+  // 状态提示（缩放由边框手柄承载，见 panelResizeService）
   const toast = el('div', 'rf-toast');
   toast.style.display = 'none';
   body.appendChild(toast);
-  const resizeHandle = el('div', 'rf-resize', '◢');
 
   panel.appendChild(body);
-  panel.appendChild(resizeHandle);
   shadow.appendChild(panel);
 
   ui['panel'] = panel;
@@ -334,6 +372,7 @@ function buildPanel(): void {
   ui['exp-select'] = expSel;
   ui['target-bar'] = targetBar;
   ui['recommend'] = recommend;
+  ui['track-box'] = trackBox;
   ui['tabs'] = tabs;
   ui['cards'] = cards;
   ui['card-search'] = searchInput;
@@ -343,10 +382,12 @@ function buildPanel(): void {
   ui['toast'] = toast;
 
   // 事件
-  btnWide.addEventListener('click', () => toggleWideMode());
+  btnSettings.addEventListener('click', () => openDisplaySettings());
+  btnMax.addEventListener('click', () => toggleMaximize());
   btnMin.addEventListener('click', () => applyMinimized(true));
   btnClose.addEventListener('click', () => closePanel());
   btnFill.addEventListener('click', () => oneClickFill());
+  btnTrackRefresh.addEventListener('click', () => refreshApplicationTrack());
   btnFillCurrent.addEventListener('click', () => fillCurrentInput());
   btnUndo.addEventListener('click', () => undoLastFill());
   btnSync.addEventListener('click', () => checkSync(true));
@@ -354,8 +395,18 @@ function buildPanel(): void {
   btnImport.addEventListener('click', () => importInput.click());
   importInput.addEventListener('change', () => importLocalCache(importInput));
   searchInput.addEventListener('input', () => {
-    cardSearchKeyword = searchInput.value.trim().toLowerCase();
-    renderCards();
+    // debounce 200ms：避免每个字符都重建结果；搜索只查本地索引，不请求后端
+    if (searchDebounceTimer != null) window.clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = window.setTimeout(() => {
+      cardSearchKeyword = searchInput.value.trim().toLowerCase();
+      searchResultLimit = 50;
+      renderCards();
+    }, 200);
+  });
+  scopeChk.box.addEventListener('change', async () => {
+    searchTabOnly = scopeChk.box.checked;
+    await savePanelState({ searchTabOnly });
+    if (cardSearchKeyword) renderCards();
   });
   quickGrid.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('[data-quick]') as HTMLElement | null;
@@ -379,7 +430,15 @@ function buildPanel(): void {
   btnNewField.addEventListener('click', () => toggleNewForm());
 
   enableDrag(panel, header);
-  enableResize(panel, resizeHandle);
+  // 边框缩放：右/下/右下角/左/上 手柄；拖动实时更新并自适应布局，松手保存尺寸（刷新后恢复）
+  attachResizeHandles(panel, {
+    onResize: () => applyLayoutClasses(),
+    onCommit: async (rect) => {
+      await savePanelState({ x: rect.x, y: rect.y, width: rect.width, height: rect.height, maximized: false });
+      state = await getPanelState();
+      applyLayoutClasses();
+    },
+  });
 }
 
 function buildMiniButton(): void {
@@ -452,58 +511,185 @@ async function applyMinimized(minimized: boolean): Promise<void> {
 
 function applyPosition(): void {
   const st = state!;
-  const width = st.width || (st.wideMode ? 640 : 360);
-  const height = st.height || 560;
+  // 最小 360x420，最大不超过窗口 90%，面板整体不超出屏幕
+  const width = Math.min(Math.max(360, st.width || 380), Math.floor(window.innerWidth * 0.9));
+  const height = Math.min(Math.max(420, st.height || 560), Math.floor(window.innerHeight * 0.9));
   const x = st.x < 0 ? Math.max(8, window.innerWidth - width - 24) : Math.min(st.x, Math.max(0, window.innerWidth - 80));
   const y = Math.max(0, Math.min(st.y, window.innerHeight - 60));
   const panel = ui['panel'];
   panel.style.left = `${x}px`;
   panel.style.top = `${y}px`;
   panel.style.width = `${width}px`;
-  panel.style.maxHeight = `${Math.min(height, window.innerHeight - 16)}px`;
+  panel.style.height = `${height}px`;
 }
 
-/** 小窗（360px）/ 宽屏编辑（640px）模式切换 */
-async function toggleWideMode(): Promise<void> {
-  const wide = !state?.wideMode;
-  await savePanelState({ wideMode: wide, width: wide ? 640 : 360 });
+/** 最大化 / 还原：宽高扩大到窗口 90%（居中保留边距），再点一次还原上次尺寸 */
+async function toggleMaximize(): Promise<void> {
+  const st = state!;
+  if (st.maximized && st.preMaxRect) {
+    await savePanelState({ maximized: false, ...st.preMaxRect });
+  } else {
+    const width = Math.floor(window.innerWidth * 0.9);
+    const height = Math.floor(window.innerHeight * 0.9);
+    await savePanelState({
+      maximized: true,
+      preMaxRect: { x: st.x, y: st.y, width: st.width, height: st.height },
+      x: Math.floor((window.innerWidth - width) / 2), y: 8, width, height,
+    });
+  }
   state = await getPanelState();
   applyPosition();
-  setToast(wide ? '已切换宽屏编辑模式' : '已切换小窗模式', 'info');
+  applyDisplaySettings();
+  setToast(state.maximized ? '已最大化，再点一次还原上次尺寸' : '已还原上次尺寸', 'info');
 }
 
-/** 右下角拖拽调节面板宽高 */
-function enableResize(panel: HTMLElement, handle: HTMLElement): void {
-  let resizing = false;
-  let startX = 0;
-  let startY = 0;
-  let startW = 0;
-  let startH = 0;
-  handle.addEventListener('pointerdown', (e: PointerEvent) => {
-    resizing = true;
-    startX = e.clientX;
-    startY = e.clientY;
-    startW = panel.offsetWidth;
-    startH = panel.offsetHeight;
-    handle.setPointerCapture(e.pointerId);
-    e.preventDefault();
-    e.stopPropagation();
+/** 重置布局：恢复默认位置、默认尺寸、默认字号/行距/显示模式 */
+async function resetPanelLayout(): Promise<void> {
+  await savePanelState({
+    x: -1, y: 96, width: 380, height: 560,
+    maximized: false, preMaxRect: null,
+    fontSizePreset: 'normal', fontSize: 14, lineHeight: 'normal',
+    displayMode: 'detail', scrollbarMode: 'auto',
   });
-  handle.addEventListener('pointermove', (e: PointerEvent) => {
-    if (!resizing) return;
-    const width = Math.max(300, Math.min(startW + e.clientX - startX, window.innerWidth - 24));
-    const height = Math.max(240, Math.min(startH + e.clientY - startY, window.innerHeight - 24));
-    panel.style.width = `${width}px`;
-    panel.style.maxHeight = `${height}px`;
+  state = await getPanelState();
+  applyPosition();
+  applyDisplaySettings();
+  setToast('已重置面板布局与显示设置', 'success');
+}
+
+/** 字号预设与行高取值（显示设置用） */
+const FONT_PRESETS: Record<string, number> = { small: 12, normal: 14, large: 16, xlarge: 18 };
+const LINE_HEIGHTS: Record<string, string> = { compact: '1.3', normal: '1.5', loose: '1.8' };
+
+/**
+ * 应用显示设置：字号（12-22）/ 行高 / 显示模式 / 滚动条策略。
+ * 通过 CSS 变量作用于 Shadow DOM 内部，不影响招聘网站页面样式；刷新后从 chrome.storage.local 恢复。
+ */
+function applyDisplaySettings(): void {
+  if (!host || !state) return;
+  const fs = Math.max(12, Math.min(22, state.fontSize || 14));
+  host.style.setProperty('--rf-fs', `${fs}px`);
+  host.style.setProperty('--rf-lh', LINE_HEIGHTS[state.lineHeight] || '1.5');
+  const panel = ui['panel'];
+  if (panel) {
+    panel.classList.toggle('rf-mode-simple', state.displayMode === 'simple');
+    panel.classList.toggle('rf-mode-debug', state.displayMode === 'debug');
+    panel.classList.toggle('rf-scroll-always', state.scrollbarMode === 'always');
+  }
+  applyLayoutClasses();
+}
+
+/** 响应式布局类：<420 窄屏（紧凑/折叠）/ 420-640 标准 / >=640 宽屏（卡片双列）；高度不足时折叠次要区域 */
+function applyLayoutClasses(): void {
+  const panel = ui['panel'];
+  if (!panel) return;
+  const w = panel.offsetWidth;
+  const h = panel.offsetHeight;
+  panel.classList.toggle('rf-narrow', w > 0 && w < 420);
+  panel.classList.toggle('rf-medium', w >= 420 && w < 640);
+  panel.classList.toggle('rf-wide', w >= 640);
+  panel.classList.toggle('rf-short', h > 0 && h < 480);
+}
+
+/** 窗口尺寸变化时重新约束位置尺寸并刷新自适应布局 */
+function watchWindowResize(): void {
+  const flag = window as unknown as { __rfWinResizeWatched?: boolean };
+  if (flag.__rfWinResizeWatched) return;
+  flag.__rfWinResizeWatched = true;
+  window.addEventListener('resize', () => {
+    if (!panelExists() || !ui['panel']) return;
+    applyPosition();
+    applyDisplaySettings();
   });
-  const finish = (e: PointerEvent) => {
-    if (!resizing) return;
-    resizing = false;
-    savePanelState({ width: panel.offsetWidth, height: panel.offsetHeight });
-    try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+}
+
+/** 显示设置弹窗：字号（小/标准/大/超大/自定义 12-22）/ 行距 / 面板宽度 / 显示模式 / 滚动条 / 重置布局 */
+function openDisplaySettings(): void {
+  if (!shadow) return;
+  shadow.querySelectorAll('.rf-dialog-mask').forEach((n) => n.remove());
+  const st = state!;
+  const mask = el('div', 'rf-dialog-mask');
+  const box = el('div', 'rf-dialog rf-dialog-wide');
+  box.appendChild(el('div', 'rf-dialog-title', '显示设置（仅作用于插件面板，不影响招聘网站）'));
+
+  const reopen = () => { mask.remove(); openDisplaySettings(); };
+
+  // 字号：预设 + 自定义（12-22）
+  const fsRow = el('div', 'rf-settings-row');
+  fsRow.appendChild(el('span', 'rf-settings-label', '字号'));
+  const presets: Array<[string, string]> = [['small', '小'], ['normal', '标准'], ['large', '大'], ['xlarge', '超大']];
+  for (const [key, label] of presets) {
+    const b = el('button', 'rf-btn rf-btn-tiny' + (st.fontSizePreset === key ? ' rf-btn-primary' : ''), label);
+    b.addEventListener('click', async () => {
+      await savePanelState({ fontSizePreset: key as PanelState['fontSizePreset'], fontSize: FONT_PRESETS[key] });
+      state = await getPanelState();
+      applyDisplaySettings();
+      reopen();
+    });
+    fsRow.appendChild(b);
+  }
+  const customInput = el('input', 'rf-edit-input rf-settings-custom') as HTMLInputElement;
+  customInput.type = 'number';
+  customInput.min = '12';
+  customInput.max = '22';
+  customInput.value = String(st.fontSize || 14);
+  customInput.title = '自定义字号（12-22px）';
+  customInput.addEventListener('change', async () => {
+    const v = Math.max(12, Math.min(22, Number(customInput.value) || 14));
+    await savePanelState({ fontSizePreset: 'custom', fontSize: v });
+    state = await getPanelState();
+    applyDisplaySettings();
+  });
+  fsRow.appendChild(customInput);
+  box.appendChild(fsRow);
+
+  // 按钮组：行距 / 面板宽度 / 内容显示模式 / 横向滚动条
+  const mkBtnGroup = (label: string, options: Array<[string, string]>, current: string,
+    onPick: (v: string) => void): HTMLElement => {
+    const row = el('div', 'rf-settings-row');
+    row.appendChild(el('span', 'rf-settings-label', label));
+    for (const [value, text] of options) {
+      const b = el('button', 'rf-btn rf-btn-tiny' + (value === current ? ' rf-btn-primary' : ''), text);
+      b.addEventListener('click', () => { onPick(value); reopen(); });
+      row.appendChild(b);
+    }
+    return row;
   };
-  handle.addEventListener('pointerup', finish);
-  handle.addEventListener('pointercancel', finish);
+  box.appendChild(mkBtnGroup('行距', [['compact', '紧凑'], ['normal', '标准'], ['loose', '宽松']],
+    st.lineHeight, async (v) => {
+      await savePanelState({ lineHeight: v as PanelState['lineHeight'] });
+      state = await getPanelState();
+      applyDisplaySettings();
+    }));
+  box.appendChild(mkBtnGroup('面板宽度', [['380', '紧凑'], ['460', '标准'], ['680', '宽屏']],
+    '', async (v) => {
+      await savePanelState({ width: Number(v), maximized: false });
+      state = await getPanelState();
+      applyPosition();
+      applyDisplaySettings();
+    }));
+  box.appendChild(mkBtnGroup('内容显示', [['simple', '简洁'], ['detail', '详细'], ['debug', '调试']],
+    st.displayMode, async (v) => {
+      await savePanelState({ displayMode: v as PanelState['displayMode'] });
+      state = await getPanelState();
+      applyDisplaySettings();
+    }));
+  box.appendChild(mkBtnGroup('横向滚动条', [['auto', '自动'], ['always', '始终显示']],
+    st.scrollbarMode, async (v) => {
+      await savePanelState({ scrollbarMode: v as PanelState['scrollbarMode'] });
+      state = await getPanelState();
+      applyDisplaySettings();
+    }));
+
+  const actions = el('div', 'rf-card-actions');
+  const btnReset = el('button', 'rf-btn rf-btn-tiny', '重置面板布局');
+  btnReset.addEventListener('click', async () => { mask.remove(); await resetPanelLayout(); openDisplaySettings(); });
+  const btnDone = el('button', 'rf-btn rf-btn-tiny rf-btn-primary', '完成');
+  btnDone.addEventListener('click', () => mask.remove());
+  actions.append(btnReset, btnDone);
+  box.appendChild(actions);
+  mask.appendChild(box);
+  shadow.appendChild(mask);
 }
 
 /** 头部拖动：指针事件实现，松手后保存位置 */
@@ -647,13 +833,18 @@ function currentAudience(): string {
   return audience === 'general_backend' || !audience ? 'general' : audience;
 }
 
+/** 置信度分层：高可信 ≥0.85 / 中可信 0.70-0.85 / 低可信 0.50-0.70 / 未匹配 <0.50 */
+type ConfidenceTier = 'high' | 'medium' | 'low' | 'unmatched';
+
 interface PreviewRow {
   match: MatchResult;
   fieldInfo: FieldInfo | null;
   checked: boolean;
+  /** 置信度分层（高/中/低/未匹配） */
+  tier: ConfidenceTier;
   /** 疑似错误原因；非空时默认不勾选并醒目标记 */
   suspiciousReason: string;
-  /** 展示状态：可填入 / 需确认 / 超字数 / 疑似错误 */
+  /** 展示状态：高可信 / 中可信 / 低可信 / 未匹配 / 超字数 / 疑似错误 */
   status: string;
 }
 
@@ -673,6 +864,8 @@ function groupOrder(key: string): number {
 /** 一键填写当前页面：扫描 → 后端匹配 → 经历块不足时确认并自动新增 → 重扫重匹配 → 分组预览 → 批量填入（不自动提交） */
 async function oneClickFill(): Promise<void> {
   try {
+    // 一键填写前先采集当前招聘页面写入投递信息表（失败不阻断填写流程）
+    captureCurrentPage(false).catch(() => { /* 采集失败不影响填写 */ });
     setToast('扫描页面字段中…', 'info');
     let fields = scanFields();
     if (fields.length === 0) {
@@ -703,6 +896,153 @@ async function oneClickFill(): Promise<void> {
     showFillPreview(resp, fields);
   } catch (err: any) {
     setToast(`填写失败：${err?.message || err}`, 'error');
+  }
+}
+
+// ==================== 投递记录采集（招聘网站页面 → 投递信息表） ====================
+
+/** 最近一次招聘页面检测结果 */
+let trackDetection: JobPageDetectResult | null = null;
+/** 采集结果提示（保存/更新/需确认） */
+let trackMessage = '';
+
+/** 检测当前页面并渲染投递记录区；招聘网站且置信度足够时自动写入投递信息表 */
+async function refreshApplicationTrack(): Promise<void> {
+  const box = ui['track-box'];
+  if (!box) return;
+  const auth = await getAuth();
+  if (!auth) {
+    box.textContent = '登录后自动采集当前招聘页面的公司/岗位/网址';
+    return;
+  }
+  trackDetection = detectJobPage();
+  trackMessage = '';
+  renderTrackBox();
+  await captureCurrentPage(false);
+}
+
+/**
+ * 采集并写入投递信息表：
+ * - 后端判定已存在相同公司/机构/岗位 → 仅更新最近访问时间/网址；
+ * - 新记录 → 默认状态“准备中”、渠道“插件采集”；
+ * - 置信度低且未确认 → 不入库，提示用户确认/编辑后保存。
+ */
+async function captureCurrentPage(confirmed: boolean, overrides?: Partial<ApplicationCapturePayload>): Promise<void> {
+  const det = trackDetection;
+  if (!det || (!det.isJobSite && !det.companyName)) return;
+  try {
+    const result = await api<ApplicationCaptureResult>('/api/application-records/capture', 'POST', {
+      companyName: det.companyName,
+      organizationName: det.organizationName,
+      positionName: det.positionName,
+      pageUrl: det.pageUrl,
+      pageTitle: det.pageTitle,
+      domain: det.domain,
+      recruitmentUrl: det.recruitmentUrl,
+      resumeEditUrl: det.resumeEditUrl,
+      resumeModifiedAt: det.resumeModifiedAt || undefined,
+      resumeModifiedSource: det.resumeModifiedSource || undefined,
+      confidenceScore: det.confidenceScore,
+      confirmed,
+      ...overrides,
+    });
+    if (result.action === 'need_confirm') {
+      trackMessage = '检测到可能的投递信息（置信度较低），请确认或编辑后保存';
+    } else if (result.action === 'updated') {
+      trackMessage = `已记录，本次已更新最近访问时间（当前状态：${result.applyStatus || '-'}）`;
+    } else {
+      trackMessage = `已新增到投递信息表（默认状态：${result.applyStatus || '准备中'}）`;
+    }
+  } catch (err: any) {
+    trackMessage = `采集失败：${err?.message || err}`;
+  }
+  renderTrackBox();
+}
+
+/** 渲染投递记录区：检测结果 + 保存/编辑/打开管理后台按钮 */
+function renderTrackBox(): void {
+  const box = ui['track-box'];
+  if (!box) return;
+  box.innerHTML = '';
+  const det = trackDetection;
+  if (!det || (!det.isJobSite && !det.companyName)) {
+    box.appendChild(el('div', 'rf-track-empty',
+      '当前页面未识别为招聘网站。打开招聘/网申页面时将自动采集公司、岗位、网址并写入投递信息表。'));
+    return;
+  }
+  const rows: Array<[string, string]> = [
+    ['公司', det.companyName || '未识别'],
+    ['机构', det.organizationName || '—'],
+    ['岗位', det.positionName || '—'],
+    ['置信度', `${Math.round(det.confidenceScore * 100)}%`],
+    ['页面', det.pageUrl.length > 64 ? det.pageUrl.slice(0, 64) + '…' : det.pageUrl],
+  ];
+  if (det.resumeModifiedAt) {
+    rows.push(['简历修改时间', `${det.resumeModifiedAt.replace('T', ' ').slice(0, 16)}（${det.resumeModifiedSource || '-'}）`]);
+  }
+  for (const [k, v] of rows) {
+    const row = el('div', 'rf-track-row');
+    row.append(el('span', 'rf-track-label', k), el('span', 'rf-track-value', v));
+    box.appendChild(row);
+  }
+  if (trackMessage) {
+    box.appendChild(el('div', 'rf-track-msg', trackMessage));
+  }
+  const btnRow = el('div', 'rf-row');
+  const btnSave = el('button', 'rf-btn rf-btn-small rf-btn-primary', '保存到投递表');
+  btnSave.title = '确认后写入投递信息表（低置信度也保存）';
+  btnSave.addEventListener('click', () => captureCurrentPage(true));
+  const btnEdit = el('button', 'rf-btn rf-btn-small', '编辑后保存');
+  btnEdit.addEventListener('click', () => openTrackEditForm());
+  const btnAdmin = el('button', 'rf-btn rf-btn-small', '打开投递表');
+  btnAdmin.title = '打开管理后台投递信息表';
+  btnAdmin.addEventListener('click', () => openAdminApplications());
+  btnRow.append(btnSave, btnEdit, btnAdmin);
+  box.appendChild(btnRow);
+}
+
+/** 内联编辑表单：用户修正插件识别错误的公司/机构/岗位后保存 */
+function openTrackEditForm(): void {
+  const box = ui['track-box'];
+  const det = trackDetection;
+  if (!box || !det) return;
+  ui['track-edit-form']?.remove();
+  const form = el('div', 'rf-track-edit');
+  const inpCompany = el('input', 'rf-search') as HTMLInputElement;
+  inpCompany.value = det.companyName;
+  inpCompany.placeholder = '公司 / 单位名称';
+  const inpOrg = el('input', 'rf-search') as HTMLInputElement;
+  inpOrg.value = det.organizationName;
+  inpOrg.placeholder = '机构 / 部门（可空）';
+  const inpPos = el('input', 'rf-search') as HTMLInputElement;
+  inpPos.value = det.positionName;
+  inpPos.placeholder = '岗位名称（可空）';
+  const btnSave = el('button', 'rf-btn rf-btn-small rf-btn-primary', '确认保存');
+  btnSave.addEventListener('click', async () => {
+    await captureCurrentPage(true, {
+      companyName: inpCompany.value.trim(),
+      organizationName: inpOrg.value.trim(),
+      positionName: inpPos.value.trim(),
+    });
+    form.remove();
+  });
+  const btnCancel = el('button', 'rf-btn rf-btn-small', '取消');
+  btnCancel.addEventListener('click', () => form.remove());
+  const row = el('div', 'rf-row');
+  row.append(btnSave, btnCancel);
+  form.append(inpCompany, inpOrg, inpPos, row);
+  ui['track-edit-form'] = form;
+  box.appendChild(form);
+}
+
+/** 打开管理后台投递信息表（同源部署：管理后台与后端同一域名） */
+async function openAdminApplications(): Promise<void> {
+  try {
+    const backendUrl = await getBackendUrl();
+    const base = new URL(backendUrl);
+    window.open(`${base.origin}/applications`, '_blank');
+  } catch {
+    setToast('无法打开管理后台：请先在设置中配置后端地址', 'warn');
   }
 }
 
@@ -783,13 +1123,46 @@ function detectSuspicious(row: { match: MatchResult; fieldInfo: FieldInfo | null
   return '';
 }
 
-/** 行状态：可填入 / 需确认 / 超字数 / 疑似错误 */
+/** 置信度分层：高可信 ≥0.85 默认勾选 / 中可信 0.70-0.85 建议确认 / 低可信 0.50-0.70 默认不勾选 */
+function confidenceTier(confidence: number): ConfidenceTier {
+  if (confidence >= 0.85) return 'high';
+  if (confidence >= 0.70) return 'medium';
+  if (confidence >= 0.50) return 'low';
+  return 'unmatched';
+}
+
+const TIER_LABELS: Record<ConfidenceTier, string> = {
+  high: '高可信', medium: '中可信', low: '低可信', unmatched: '未匹配',
+};
+
+/** 行状态：疑似错误 / 超字数 / 置信度分层标签 */
 function rowStatus(row: { match: MatchResult; fieldInfo: FieldInfo | null }, suspiciousReason: string): string {
   if (suspiciousReason) return '疑似错误';
   const limit = row.fieldInfo?.wordLimit ?? null;
   if (limit != null && String(row.match.value || '').length > limit) return '超字数';
-  if (row.match.confidence < 0.75) return '需确认';
-  return '可填入';
+  const tier = confidenceTier(row.match.confidence);
+  return tier === 'medium' ? '中可信·建议确认' : TIER_LABELS[tier];
+}
+
+/** 客户端 finalValidation：确认填入前对勾选项逐条重校验类型合法性，不通过返回原因 */
+function finalValidation(row: PreviewRow): string {
+  const evidence = fieldEvidenceText(row.fieldInfo);
+  const value = String(row.match.value || '').trim();
+  if (!value) return '推荐内容为空';
+  if (/邮箱|e-?mail/i.test(evidence) && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) {
+    return '邮箱字段内容不是邮箱格式';
+  }
+  if (/手机号|联系电话|联系方式/.test(evidence) && !/^1\d{10}$/.test(value)) {
+    return '手机号字段内容不是 11 位大陆手机号';
+  }
+  if (/姓名/.test(evidence) && !/证明人|联系人|亲属|家属|紧急|父亲|母亲|推荐人/.test(evidence)
+    && !/^[\u4e00-\u9fa5·]{2,15}$/.test(value) && !/^[A-Za-z\s]{2,30}$/.test(value)) {
+    return '姓名字段内容不符合姓名格式';
+  }
+  if (/日期|出生时间|出生年月/.test(evidence) && !DATE_LIKE.test(value) && !/至今|目前/.test(value)) {
+    return '日期字段内容不是日期格式';
+  }
+  return '';
 }
 
 /** 预览分组：基础/个人/求职意向/教育(按学校)/工作(按记录)/项目/家庭/语言/荣誉/专利/技能/科研/校园/开放题 */
@@ -841,13 +1214,13 @@ function buildPreviewGroups(rows: PreviewRow[], resp: AutofillMatchResponse): Ma
     const info = infoById.get(item.fieldId) || null;
     push('未匹配字段', {
       match: { fieldId: item.fieldId, matchedFieldKey: '', matchedFieldName: item.reason || '未匹配', value: '', confidence: 0, reason: item.reason },
-      fieldInfo: info, checked: false, suspiciousReason: '', status: '未匹配',
+      fieldInfo: info, checked: false, tier: 'unmatched', suspiciousReason: '', status: '未匹配',
     });
   }
   return groups;
 }
 
-/** 分组预览弹窗：按模块展示，疑似错误/低置信度默认不勾选，确认前执行 finalValidation */
+/** 分组预览弹窗：置信度分层统计 + 快捷按钮，疑似错误/低可信默认不勾选，确认前执行 finalValidation */
 function showFillPreview(resp: AutofillMatchResponse, fields: FieldInfo[]): void {
   if (!shadow) return;
   shadow.querySelectorAll('.rf-dialog-mask').forEach((n) => n.remove());
@@ -861,33 +1234,88 @@ function showFillPreview(resp: AutofillMatchResponse, fields: FieldInfo[]): void
     const info = infoById.get(m.fieldId) || null;
     const limit = info?.wordLimit ?? null;
     const overLimit = limit != null && String(m.value || '').length > limit;
-    const suspiciousReason = detectSuspicious({ match: m, fieldInfo: info });
+    // 疑似错误以后端类型校验结果优先，再叠加客户端检测（禁止复用任何全局推荐结果）
+    const suspiciousReason = m.suspicious
+      ? (m.suspiciousReason || '值类型与字段语义冲突')
+      : detectSuspicious({ match: m, fieldInfo: info });
+    const tier = confidenceTier(m.confidence);
     const status = rowStatus({ match: m, fieldInfo: info }, suspiciousReason);
-    // 默认勾选策略：疑似错误 / 超字数 / 低置信度不勾选（已移除敏感字段跳过逻辑）
-    const checked = !suspiciousReason && !overLimit && m.confidence >= 0.75;
-    return { match: m, fieldInfo: info, checked, suspiciousReason, status };
+    // 默认勾选策略：仅高可信 + 中可信；疑似错误 / 超字数 / 低可信 / 未匹配不勾选
+    const checked = !suspiciousReason && !overLimit && (tier === 'high' || tier === 'medium');
+    return { match: m, fieldInfo: info, checked, tier, suspiciousReason, status };
   });
-  const groups = buildPreviewGroups(rows, resp);
+  const tierCount: Record<ConfidenceTier, number> = { high: 0, medium: 0, low: 0, unmatched: 0 };
+  for (const r of rows) tierCount[r.tier]++;
   const suspiciousCount = rows.filter((r) => r.suspiciousReason).length;
+  const unmatchedCount = (resp.unmatched || []).length;
 
   const mask = el('div', 'rf-dialog-mask');
   const box = el('div', 'rf-dialog rf-dialog-wide');
-  box.appendChild(el('div', 'rf-dialog-title',
-    `填充预览：匹配 ${matches.length} 项，未匹配 ${(resp.unmatched || []).length} 项` + (suspiciousCount ? `，疑似错误 ${suspiciousCount} 项（已默认不勾选）` : '')));
-  const list = el('div', 'rf-preview-list');
-  const orderedKeys = Array.from(groups.keys()).sort((a, b) => groupOrder(a) - groupOrder(b));
-  for (const key of orderedKeys) {
-    list.appendChild(el('div', 'rf-preview-group-title', `${key}（${groups.get(key)!.length}）`));
-    for (const row of groups.get(key)!) list.appendChild(buildPreviewItem(row));
+  box.appendChild(el('div', 'rf-dialog-title', `填充预览：匹配 ${matches.length} 项，未匹配 ${unmatchedCount} 项`));
+  // 顶部统计：分层数量与默认勾选策略
+  box.appendChild(el('div', 'rf-preview-stats',
+    `高可信 ${tierCount.high} 项（默认勾选） · 中可信 ${tierCount.medium} 项（建议确认）`
+    + ` · 低可信 ${tierCount.low} 项（默认不勾选） · 未匹配 ${unmatchedCount} 项`
+    + (suspiciousCount ? ` · 疑似错误 ${suspiciousCount} 项（默认不勾选）` : '')));
+
+  const listHolder = el('div', 'rf-preview-list');
+  const renderList = () => {
+    listHolder.innerHTML = '';
+    const groups = buildPreviewGroups(rows, resp);
+    const orderedKeys = Array.from(groups.keys()).sort((a, b) => groupOrder(a) - groupOrder(b));
+    for (const key of orderedKeys) {
+      listHolder.appendChild(el('div', 'rf-preview-group-title', `${key}（${groups.get(key)!.length}）`));
+      for (const row of groups.get(key)!) listHolder.appendChild(buildPreviewItem(row));
+    }
+  };
+  renderList();
+  box.appendChild(listHolder);
+
+  // 快捷按钮：按置信度分层批量勾选 / 取消
+  const setChecked = (pred: (r: PreviewRow) => boolean) => {
+    rows.forEach((r) => { r.checked = pred(r) && !r.suspiciousReason; });
+    renderList();
+  };
+  const quick = el('div', 'rf-card-actions');
+  const mkQuickBtn = (label: string, fn: () => void) => {
+    const b = el('button', 'rf-btn rf-btn-tiny', label);
+    b.addEventListener('click', fn);
+    quick.appendChild(b);
+  };
+  mkQuickBtn('只填高可信', () => setChecked((r) => r.tier === 'high'));
+  mkQuickBtn('填高可信+中可信', () => setChecked((r) => r.tier === 'high' || r.tier === 'medium'));
+  mkQuickBtn('全部取消', () => setChecked(() => false));
+  if (suspiciousCount > 0) {
+    mkQuickBtn('取消疑似错误', () => {
+      rows.filter((r) => r.suspiciousReason).forEach((r) => { r.checked = false; });
+      renderList();
+    });
   }
-  box.appendChild(list);
+  box.appendChild(quick);
 
   const actions = el('div', 'rf-card-actions');
   const btnCancel = el('button', 'rf-btn rf-btn-tiny', '取消');
   btnCancel.addEventListener('click', () => mask.remove());
-  const btnConfirm = el('button', 'rf-btn rf-btn-tiny rf-btn-primary', '确认填入');
+  const btnConfirm = el('button', 'rf-btn rf-btn-tiny rf-btn-primary', '确认填入选中项');
   btnConfirm.addEventListener('click', async () => {
-    // finalValidation：确认前检查用户是否勾选了疑似错误字段
+    // finalValidation：确认前对所有勾选项重校验类型，不通过自动取消勾选并移入疑似错误，不允许填入
+    let invalid = 0;
+    for (const r of rows) {
+      if (!r.checked) continue;
+      const reason = finalValidation(r);
+      if (reason) {
+        r.checked = false;
+        r.suspiciousReason = reason;
+        r.status = '疑似错误';
+        invalid++;
+      }
+    }
+    if (invalid > 0) {
+      renderList();
+      setToast(`${invalid} 项未通过最终类型校验，已自动取消勾选，请检查`, 'warn');
+      return;
+    }
+    // 检查用户是否手动勾选了疑似错误字段，需二次确认
     const checkedSusp = rows.filter((r) => r.checked && r.suspiciousReason);
     if (checkedSusp.length > 0) {
       const example = checkedSusp.slice(0, 2).map((r) => {
@@ -899,6 +1327,11 @@ function showFillPreview(resp: AutofillMatchResponse, fields: FieldInfo[]): void
         '仍要填入', '返回调整',
       );
       if (!proceed) return;
+    }
+    const checkedCount = rows.filter((r) => r.checked).length;
+    if (checkedCount === 0) {
+      setToast('当前没有勾选任何字段', 'warn');
+      return;
     }
     mask.remove();
     await applyPreviewFills(rows, resp);
@@ -925,7 +1358,7 @@ function buildPreviewItem(row: PreviewRow): HTMLElement {
   if (limit != null) tags.push(`限 ${limit} 字`);
   if (m.recordName) tags.push(`来源：${m.recordName}`);
   if (m.matchedFieldKey) tags.push(`字段：${m.matchedFieldKey}`);
-  tags.push(`分数 ${m.confidence.toFixed(2)}`);
+  tags.push(`分数 ${(m.confidence * 100).toFixed(0)}`);
   tags.push(row.status);
   if (row.suspiciousReason) tags.push(`⚠ ${row.suspiciousReason}`);
   meta.appendChild(el('div', 'rf-preview-title', `${label} ← ${m.matchedFieldName || '（无）'}`));
@@ -1036,7 +1469,7 @@ async function fillCurrentInput(): Promise<void> {
 
 // ==================== 核心填入：字数限制 / 撤回 / 最近使用 ====================
 
-type FillSource = { kind: 'field' | 'material' | 'temp'; refId?: number | null; fillType?: 'auto' | 'manual' };
+type FillSource = { kind: 'field' | 'material' | 'temp'; refId?: number | null; fillType?: 'auto' | 'manual'; structType?: StructFieldType };
 
 /**
  * 把内容填入当前选中输入框（统一入口）：
@@ -1050,6 +1483,16 @@ async function fillValueToTarget(value: string, name: string, source: FillSource
     return false;
   }
   const info = scanElement(target);
+  // 强制填入守卫：内容类型与当前输入框类型冲突时二次确认，用户确认后才填入
+  const targetType = info ? detectTargetFieldType(info) : null;
+  const srcType = source.structType ?? null;
+  if (targetType && srcType && !structTypeCompatible(targetType, { structType: srcType, fieldValue: value } as CustomFieldItem & { structType?: StructFieldType })) {
+    const ok = await confirmDialog(
+      `当前输入框识别为“${STRUCT_TYPE_LABELS[targetType]}”，但你选择的是“${STRUCT_TYPE_LABELS[srcType] || '类型不符'}”内容，可能填错。是否仍然填入？`,
+      '仍然填入', '取消',
+    );
+    if (!ok) return false;
+  }
   const limit = info?.wordLimit ?? maxlengthOf(target) ?? null;
   let final = value;
   if (limit != null && value.length > limit) {
@@ -1132,7 +1575,7 @@ function renderRecommendations(): void {
     return;
   }
   const tplId = Number((ui['tpl-select'] as HTMLSelectElement)?.value || 0) || null;
-  const recs = recommendFields(info, cache?.cachedFields || [], { templateId: tplId });
+  const recs = recommendForTarget(info, tplId);
   box.style.display = '';
   box.appendChild(el('div', 'rf-subtitle', `推荐填入（识别：${info.label || info.placeholder || info.name || '当前输入框'}${info.wordLimit ? `，限 ${info.wordLimit} 字` : ''}）`));
   if (recs.length === 0) {
@@ -1142,6 +1585,21 @@ function renderRecommendations(): void {
   for (const rec of recs) {
     box.appendChild(buildRecommendItem(rec));
   }
+}
+
+/**
+ * 当前输入框智能推荐：fieldType 优先级高于当前 tab。
+ * 先识别输入框字段类型，再按类型过滤候选（结构化子字段 + 普通字段）：
+ * 单位名称字段只推荐公司名，绝不推荐项目描述/整段经历；日期字段只推荐日期。
+ */
+function recommendForTarget(info: FieldInfo, tplId: number | null): RecommendItem[] {
+  const targetType = detectTargetFieldType(info);
+  const candidates: Array<CustomFieldItem & { structType?: StructFieldType }> = [
+    ...structuredRecommendCandidates(),
+    ...(cache?.cachedFields || []),
+  ];
+  const filtered = targetType ? candidates.filter((c) => structTypeCompatible(targetType, c)) : candidates;
+  return recommendFields(info, filtered, { templateId: tplId });
 }
 
 function buildRecommendItem(rec: RecommendItem): HTMLElement {
@@ -1446,8 +1904,18 @@ function renderTargetInfo(): void {
   bar.appendChild(el('div', 'rf-target-title', `已选中输入框：${label}`));
   bar.appendChild(el('div', 'rf-target-detail',
     `${info?.type || target.tagName.toLowerCase()}${parts.length ? ' · ' + parts.join(' · ') : ''}`));
+  // 识别详情：detectedFieldType / sectionType / blockIndex / 推荐内容类型（推荐优先于当前 tab）
+  const fType = info ? detectTargetFieldType(info) : null;
+  const meta: string[] = [];
+  if (fType) meta.push(`detectedFieldType: ${fType}（${STRUCT_TYPE_LABELS[fType]}）`);
+  if (info?.sectionTitle) meta.push(`sectionType: ${info.sectionTitle}`);
+  if (info?.blockType) meta.push(`blockIndex: ${(info.blockIndex ?? 0) + 1}（${info.blockType}）`);
+  if (fType) meta.push(`推荐内容类型: ${STRUCT_TYPE_LABELS[fType]}`);
+  if (meta.length > 0) bar.appendChild(el('div', 'rf-target-detail', meta.join(' · ')));
   bar.className = 'rf-target-bar rf-target-bar-active';
   renderRecommendations();
+  // 目标输入框变化后刷新卡片适配状态（适合/需确认/不建议）
+  renderCards();
 }
 
 // ==================== 插件字段接口（经 background 代理，避免网页 CORS/混合内容限制） ====================
@@ -1514,16 +1982,487 @@ function structuredFieldCards(): CustomFieldItem[] {
     items.forEach(([label, v], j) => cards.push(mk('紧急联系人', `emergency_${c.id ?? i}_${label}`, `紧急联系人${label}`, v, i * 10 + j)));
   });
 
-  (cache?.cachedInternships || []).forEach((n: any, i: number) => {
-    const company = n.shortName || n.company || `实习#${n.id ?? i}`;
-    const items: Array<[string, string | null | undefined]> = [
-      ['证明人姓名', n.certifierName], ['证明人单位及职务', n.certifierCompanyAndPosition],
-      ['证明人联系电话', n.certifierPhone], ['证明人邮箱', n.certifierEmail],
-    ];
-    items.forEach(([label, v], j) => cards.push(mk('工作/实习经历', `certifier_${n.id ?? i}_${label}`, `${label}（${company}）`, v, 100 + i * 10 + j)));
-  });
+  // 实习证明人已并入实习 record card 结构化子字段展示，不再单独生成只读卡片，避免重复。
   return cards;
 }
+
+// ==================== 实习/项目结构化记录卡片 ====================
+
+/** 结构化子字段类型：当前输入框智能推荐按类型过滤，禁止把整段描述填入单位/职位等短字段 */
+type StructFieldType = 'company' | 'position' | 'startDate' | 'endDate' | 'dateRange'
+  | 'personName' | 'email' | 'phone' | 'responsibility' | 'projectName' | 'projectDesc' | 'certifier' | 'other';
+
+/** 结构化记录子字段行：短字段，支持 填入当前输入框 / 临时编辑后填入 / 复制；空值显示“未填写”不允许填入 */
+function buildStructRow(recordTitle: string, label: string, value: string | null | undefined, structType?: StructFieldType): HTMLElement {
+  const text = value && String(value).trim() ? String(value).trim() : '';
+  const row = el('div', 'rf-struct-row');
+  row.appendChild(el('div', 'rf-struct-label', label));
+  row.appendChild(el('div', text ? 'rf-struct-value' : 'rf-struct-value rf-struct-empty', text || '未填写'));
+  const actions = el('div', 'rf-card-actions');
+  const name = `${recordTitle}-${label}`;
+  if (text) {
+    const pseudo: CustomFieldItem = {
+      fieldKey: '', fieldName: name, fieldType: 'text', fieldCategory: '', fieldValue: text,
+      matchKeywords: [], enabled: true, readOnly: true,
+    };
+    const btnFill = el('button', 'rf-btn rf-btn-tiny rf-btn-primary', '填入当前输入框');
+    btnFill.addEventListener('click', () => fillValueToTarget(text, name, { kind: 'field', refId: null, fillType: 'manual', structType }));
+    const btnTemp = el('button', 'rf-btn rf-btn-tiny', '临时编辑后填入');
+    btnTemp.addEventListener('click', () => tempEditDialog(pseudo));
+    const btnCopy = el('button', 'rf-btn rf-btn-tiny', '复制');
+    btnCopy.addEventListener('click', () => copyText(text));
+    actions.append(btnFill, btnTemp, btnCopy);
+    if (structType) {
+      const fit = candidateFitState({ ...pseudo, structType });
+      if (fit !== 'unknown') actions.prepend(el('span', FIT_TAG[fit][1], FIT_TAG[fit][0]));
+    }
+  } else {
+    actions.appendChild(el('span', 'rf-card-key', '未填写·管理后台补充'));
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+/** 结构化长文本行：预览 + 字数版本（完整/≤500/≤300/≤200/≤100）+ 临时编辑 + 复制；优先用后端下发的字数版本变体，无则截断 */
+function buildLongTextRow(recordTitle: string, label: string, value: string, structType?: StructFieldType,
+  variants?: Array<{ lengthType?: string; content?: string }>): HTMLElement {
+  const row = el('div', 'rf-struct-row rf-struct-row-block');
+  row.appendChild(el('div', 'rf-struct-label', `${label}（${value.length} 字）`));
+  const preview = el('div', 'rf-struct-value', value.slice(0, 80) + (value.length > 80 ? '…' : ''));
+  preview.title = value;
+  row.appendChild(preview);
+  const actions = el('div', 'rf-card-actions');
+  const name = `${recordTitle}-${label}`;
+  // 字数版本取内容：优先后端挂载的同档位变体（与自动填充同源），无则本地截断
+  const VARIANT_LEN: Record<number, string> = { 200: 'within_200', 300: 'within_300', 500: 'within_500' };
+  const contentFor = (limit: number | null): string => {
+    if (limit == null) return value;
+    const v = (variants || []).find((x) => x.lengthType === VARIANT_LEN[limit] && x.content);
+    return v?.content || value.slice(0, limit);
+  };
+  const versions: Array<[string, number | null]> = [['完整版', null], ['≤500字', 500], ['≤300字', 300], ['≤200字', 200], ['≤100字', 100]];
+  for (const [tag, limit] of versions) {
+    if (limit != null && value.length <= limit) continue;
+    const btn = el('button', 'rf-btn rf-btn-tiny', `填入${tag}`);
+    btn.addEventListener('click', () => fillValueToTarget(
+      contentFor(limit), `${name}（${tag}）`, { kind: 'field', refId: null, fillType: 'manual', structType }));
+    actions.appendChild(btn);
+  }
+  const pseudo: CustomFieldItem = {
+    fieldKey: '', fieldName: name, fieldType: 'text', fieldCategory: '', fieldValue: value,
+    matchKeywords: [], enabled: true, readOnly: true,
+  };
+  const btnTemp = el('button', 'rf-btn rf-btn-tiny', '临时编辑后填入');
+  btnTemp.addEventListener('click', () => tempEditDialog(pseudo));
+  const btnCopy = el('button', 'rf-btn rf-btn-tiny', '复制');
+  btnCopy.addEventListener('click', () => copyText(value));
+  actions.append(btnTemp, btnCopy);
+  if (structType) {
+    const fit = candidateFitState({ ...pseudo, structType });
+    if (fit !== 'unknown') actions.prepend(el('span', FIT_TAG[fit][1], FIT_TAG[fit][0]));
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+/** 长文本子字段：有值用版本行，空值显示未填写；variants 为后端下发的同字段字数版本 */
+function appendLongText(card: HTMLElement, recordTitle: string, label: string, value: string | null | undefined,
+  structType?: StructFieldType, variants?: Array<{ lengthType?: string; content?: string }>): void {
+  const text = value && String(value).trim() ? String(value).trim() : '';
+  card.appendChild(text ? buildLongTextRow(recordTitle, label, text, structType, variants) : buildStructRow(recordTitle, label, '', structType));
+}
+
+/** 后端经历计划中与指定块绑定的记录 id（默认推荐当前 block 绑定 record） */
+function boundRecordId(blockType: string, blockIndex: number): number | null {
+  const plan = (lastMatchResponse?.experiencePlan || []).filter((p) => p.type === blockType);
+  return plan[blockIndex]?.id ?? null;
+}
+
+/** 当前选中输入框所在块的绑定记录 id（用于 record card 置顶与标记） */
+function currentBlockBoundId(blockType: 'internship' | 'project'): number | null {
+  const target = getCurrentTarget();
+  if (!target) return null;
+  const info = scanElement(target);
+  if (!info || info.blockType !== blockType) return null;
+  return boundRecordId(blockType, info.blockIndex ?? 0);
+}
+
+/** 按字段 label 从绑定记录中取对应子字段值：同一块内所有字段只来自同一条记录，禁止跨记录串数据 */
+function pickRecordValue(kind: 'internship' | 'project', r: any, f: FieldInfo): string {
+  const text = [f.label, f.questionText, f.nearbyText, f.ariaLabel, f.placeholder].filter(Boolean).join(' ');
+  if (kind === 'internship') {
+    if (/证明人单位及职务|单位及职务/.test(text)) return r.certifierCompanyAndPosition || '';
+    if (/证明人.*电话|联系人电话|主管电话/.test(text)) return r.certifierPhone || '';
+    if (/证明人.*邮箱/.test(text)) return r.certifierEmail || '';
+    if (/证明人|联系人|推荐人|主管/.test(text)) return r.certifierName || '';
+    if (/单位|公司|企业|雇主/.test(text)) return r.company || '';
+    if (/职位|岗位|职务/.test(text)) return r.position || '';
+    if (/开始时间|入职时间|起始/.test(text)) return r.startDate || '';
+    if (/结束时间|离职时间|截止/.test(text)) return r.endDate || '';
+    if (/部门/.test(text)) return r.department || '';
+    if (/职责|工作内容|实习内容|主要职责|描述/.test(text)) return r.description || '';
+    if (/成果|业绩/.test(text)) return r.highlights || '';
+    return '';
+  }
+  if (/项目名称/.test(text)) return r.projectName || '';
+  if (/角色/.test(text)) return r.role || '';
+  if (/技术栈|技术/.test(text)) return r.techStack || '';
+  if (/开始时间/.test(text)) return r.startDate || '';
+  if (/结束时间/.test(text)) return r.endDate || '';
+  if (/主要工作|职责|工作内容/.test(text)) return r.responsibilities || '';
+  if (/项目成果|成果|业绩/.test(text)) return r.result || '';
+  if (/项目描述|项目简介|项目介绍|描述/.test(text)) return r.projectIntro || r.description || '';
+  return '';
+}
+
+/** 整组填充：把选定记录绑定到当前输入框所在块，逐字段填入同一记录的子字段；记录中为空的字段跳过不填 */
+async function fillRecordToBlock(kind: 'internship' | 'project', record: any): Promise<void> {
+  const target = getCurrentTarget();
+  const info = target ? scanElement(target) : null;
+  if (!info?.blockType) {
+    setToast(`请先点击页面中${kind === 'internship' ? '工作/实习经历' : '项目经历'}块内的一个输入框`, 'warn');
+    return;
+  }
+  const fields = scanFields().filter((f) => f.blockType === info.blockType && f.blockIndex === (info.blockIndex ?? 0));
+  if (fields.length === 0) {
+    setToast('当前块内未识别到字段，请重新扫描', 'warn');
+    return;
+  }
+  let filled = 0;
+  let skipped = 0;
+  for (const f of fields) {
+    const elem = locateFieldElement(f.fieldId);
+    if (!elem) { skipped++; continue; }
+    let val = pickRecordValue(kind, record, f);
+    if (!val) { skipped++; continue; }
+    const limit = f.wordLimit ?? null;
+    if (limit != null && val.length > limit) val = val.slice(0, limit);
+    undoStack.push({ el: elem, prevText: readElementText(elem) });
+    const res = setElementValue(elem, val);
+    if (res.success) filled++;
+    else skipped++;
+  }
+  setToast(`整块填充完成：已填 ${filled} 个字段，跳过 ${skipped} 个（记录中未填写或未识别）`, filled > 0 ? 'success' : 'warn');
+}
+
+/** 实习 record card：基础信息 / 工作内容 / 证明人 三区域，每个子字段可单独填入 */
+function buildInternshipRecordCard(n: any, boundToBlock = false): HTMLElement {
+  const title = n.shortName || n.company || `实习记录#${n.id ?? ''}`;
+  const card = el('div', 'rf-card rf-record-card');
+  const head = el('div', 'rf-card-head');
+  head.appendChild(el('span', 'rf-card-name', `${title}实习`));
+  if (n.startDate || n.endDate) head.appendChild(el('span', 'rf-card-key', `${n.startDate || '?'} ~ ${n.endDate || '至今'}`));
+  if (boundToBlock) head.appendChild(el('span', 'rf-fit-tag rf-fit-ok', '当前块绑定'));
+  const btnBlock = el('button', 'rf-btn rf-btn-tiny', '填入当前工作经历块');
+  btnBlock.addEventListener('click', () => fillRecordToBlock('internship', n));
+  head.appendChild(btnBlock);
+  card.appendChild(head);
+
+  card.appendChild(el('div', 'rf-struct-section', '基础信息'));
+  card.appendChild(buildStructRow(title, '单位名称', n.company, 'company'));
+  card.appendChild(buildStructRow(title, '职位名称', n.position, 'position'));
+  card.appendChild(buildStructRow(title, '开始时间', n.startDate, 'startDate'));
+  card.appendChild(buildStructRow(title, '结束时间', n.endDate, 'endDate'));
+  card.appendChild(buildStructRow(title, '时间范围', n.startDate || n.endDate ? `${(n.startDate || '').replace(/-/g, '.')} - ${(n.endDate || '').replace(/-/g, '.')}` : '', 'dateRange'));
+  card.appendChild(buildStructRow(title, '部门', n.department, 'other'));
+  card.appendChild(buildStructRow(title, '工作地点', n.city, 'other'));
+  card.appendChild(buildStructRow(title, '技术栈', n.techStack, 'other'));
+
+  card.appendChild(el('div', 'rf-struct-section', '工作内容'));
+  appendLongText(card, title, '工作职责', n.description, 'responsibility', n.responsibilityVariants);
+  appendLongText(card, title, '工作成果', n.highlights, 'responsibility', n.resultVariants);
+
+  card.appendChild(el('div', 'rf-struct-section', '证明人'));
+  card.appendChild(buildStructRow(title, '证明人姓名', n.certifierName, 'certifier'));
+  card.appendChild(buildStructRow(title, '证明人单位', n.certifierCompany, 'other'));
+  card.appendChild(buildStructRow(title, '证明人职务', n.certifierPosition, 'other'));
+  card.appendChild(buildStructRow(title, '证明人单位及职务', n.certifierCompanyAndPosition, 'certifier'));
+  card.appendChild(buildStructRow(title, '证明人联系电话', n.certifierPhone, 'phone'));
+  card.appendChild(buildStructRow(title, '证明人邮箱', n.certifierEmail, 'email'));
+  card.appendChild(buildStructRow(title, '证明人与本人关系', n.certifierRelation, 'other'));
+  card.appendChild(buildStructRow(title, '备注', n.certifierRemark, 'other'));
+  return card;
+}
+
+/** 项目 record card：项目基础字段 + 简介/主要工作/成果/合并版（各含字数版本） */
+function buildProjectRecordCard(p: any, boundToBlock = false): HTMLElement {
+  const title = p.shortName || p.projectName || `项目记录#${p.id ?? ''}`;
+  const card = el('div', 'rf-card rf-record-card');
+  const head = el('div', 'rf-card-head');
+  head.appendChild(el('span', 'rf-card-name', title));
+  if (p.startDate || p.endDate) head.appendChild(el('span', 'rf-card-key', `${p.startDate || '?'} ~ ${p.endDate || '至今'}`));
+  if (boundToBlock) head.appendChild(el('span', 'rf-fit-tag rf-fit-ok', '当前块绑定'));
+  const btnBlock = el('button', 'rf-btn rf-btn-tiny', '填入当前项目经历块');
+  btnBlock.addEventListener('click', () => fillRecordToBlock('project', p));
+  head.appendChild(btnBlock);
+  card.appendChild(head);
+
+  card.appendChild(el('div', 'rf-struct-section', '项目信息'));
+  card.appendChild(buildStructRow(title, '项目名称', p.projectName, 'projectName'));
+  card.appendChild(buildStructRow(title, '项目角色', p.role, 'other'));
+  card.appendChild(buildStructRow(title, '开始时间', p.startDate, 'startDate'));
+  card.appendChild(buildStructRow(title, '结束时间', p.endDate, 'endDate'));
+  card.appendChild(buildStructRow(title, '项目时间范围', p.startDate || p.endDate ? `${(p.startDate || '').replace(/-/g, '.')} - ${(p.endDate || '').replace(/-/g, '.')}` : '', 'dateRange'));
+  card.appendChild(buildStructRow(title, '技术栈', p.techStack, 'other'));
+
+  card.appendChild(el('div', 'rf-struct-section', '项目内容'));
+  appendLongText(card, title, '项目简介', p.projectIntro || p.description, 'projectDesc', p.descriptionVariants);
+  appendLongText(card, title, '主要工作', p.responsibilities, 'responsibility', p.responsibilityVariants);
+  appendLongText(card, title, '项目成果', p.result, 'responsibility', p.resultVariants);
+  const combined = [p.description, p.projectIntro, p.responsibilities, p.result].filter((s: any) => s && String(s).trim()).map((s: any) => String(s).trim()).join('\n');
+  appendLongText(card, title, '合并版', combined, 'projectDesc', p.combinedVariants);
+  return card;
+}
+
+/** 实习分类：逐段实习渲染 record card（支持搜索过滤，当前块绑定 record 置顶） */
+function renderInternshipRecordCards(cards: HTMLElement): void {
+  const list = (cache?.cachedInternships || []).filter((n: any) => !cardSearchKeyword
+    || JSON.stringify(n).toLowerCase().includes(cardSearchKeyword));
+  const boundId = currentBlockBoundId('internship');
+  list.sort((a: any, b: any) => ((b.id === boundId ? 1 : 0) - (a.id === boundId ? 1 : 0)));
+  if (list.length === 0) {
+    cards.appendChild(el('div', 'rf-empty', '暂无实习记录，请在管理后台“实习经历”新增'));
+    return;
+  }
+  for (const n of list) cards.appendChild(buildInternshipRecordCard(n, n.id === boundId));
+}
+
+/** 项目分类：逐个项目渲染 record card + 新增项目记录入口 */
+function renderProjectRecordCards(cards: HTMLElement): void {
+  const list = (cache?.cachedProjects || []).filter((p: any) => !cardSearchKeyword
+    || JSON.stringify(p).toLowerCase().includes(cardSearchKeyword));
+  const btnAdd = el('button', 'rf-btn rf-btn-tiny', '+ 新增项目记录（同步到数据库）');
+  btnAdd.addEventListener('click', () => addProjectRecordDialog());
+  const bar = el('div', 'rf-card-actions');
+  bar.appendChild(btnAdd);
+  cards.appendChild(bar);
+  if (list.length === 0) {
+    cards.appendChild(el('div', 'rf-empty', '暂无项目记录，点击上方按钮新增'));
+    return;
+  }
+  const boundProjectId = currentBlockBoundId('project');
+  list.sort((a: any, b: any) => ((b.id === boundProjectId ? 1 : 0) - (a.id === boundProjectId ? 1 : 0)));
+  for (const p of list) cards.appendChild(buildProjectRecordCard(p, p.id === boundProjectId));
+}
+
+/** 插件内新增项目记录：保存到数据库，管理后台同步可见，后续参与自动填充 */
+function addProjectRecordDialog(): void {
+  if (!shadow) return;
+  shadow.querySelectorAll('.rf-dialog-mask').forEach((n) => n.remove());
+  const mask = el('div', 'rf-dialog-mask');
+  const box = el('div', 'rf-dialog rf-dialog-wide');
+  box.appendChild(el('div', 'rf-dialog-title', '新增项目经历'));
+  const name = el('input', 'rf-edit-input') as HTMLInputElement;
+  name.placeholder = '项目名称（必填）';
+  const role = el('input', 'rf-edit-input') as HTMLInputElement;
+  role.placeholder = '项目角色';
+  const start = el('input', 'rf-edit-input') as HTMLInputElement;
+  start.placeholder = '开始时间，如 2025-06';
+  const end = el('input', 'rf-edit-input') as HTMLInputElement;
+  end.placeholder = '结束时间，如 2025-09';
+  const tech = el('input', 'rf-edit-input') as HTMLInputElement;
+  tech.placeholder = '技术栈';
+  const intro = el('textarea', 'rf-edit-area') as HTMLTextAreaElement;
+  intro.placeholder = '项目简介/描述';
+  const resp = el('textarea', 'rf-edit-area') as HTMLTextAreaElement;
+  resp.placeholder = '主要工作/职责';
+  const result = el('textarea', 'rf-edit-area') as HTMLTextAreaElement;
+  result.placeholder = '项目成果';
+  box.append(
+    editRow('项目名称', name), editRow('项目角色', role),
+    editRow('开始时间', start), editRow('结束时间', end), editRow('技术栈', tech),
+    editRow('项目简介', intro), editRow('主要工作', resp), editRow('项目成果', result),
+  );
+  const actions = el('div', 'rf-card-actions');
+  const btnCancel = el('button', 'rf-btn rf-btn-tiny', '取消');
+  btnCancel.addEventListener('click', () => mask.remove());
+  const btnSave = el('button', 'rf-btn rf-btn-tiny rf-btn-primary', '保存并同步');
+  btnSave.addEventListener('click', async () => {
+    if (!name.value.trim()) {
+      setToast('项目名称不能为空', 'warn');
+      return;
+    }
+    try {
+      await api('/api/profile/project', 'POST', {
+        projectName: name.value.trim(), role: role.value.trim(), shortName: name.value.trim(),
+        startDate: start.value.trim(), endDate: end.value.trim(), techStack: tech.value.trim(),
+        projectIntro: intro.value.trim(), description: intro.value.trim(),
+        responsibilities: resp.value.trim(), result: result.value.trim(),
+      });
+      mask.remove();
+      setToast('已保存项目记录，同步中…', 'success');
+      checkSync(false);
+    } catch (err: any) {
+      setToast(`保存失败：${err?.message || err}`, 'error');
+    }
+  });
+  actions.append(btnCancel, btnSave);
+  box.appendChild(actions);
+  mask.appendChild(box);
+  shadow.appendChild(mask);
+}
+
+/**
+ * 结构化子字段推荐候选：实习/项目/家庭/紧急联系人的子字段转为带关键词的伪字段，
+ * 供当前输入框智能推荐使用（fieldType 优先级高于当前 tab）。
+ */
+function structuredRecommendCandidates(): Array<CustomFieldItem & { structType?: StructFieldType }> {
+  const out: Array<CustomFieldItem & { structType?: StructFieldType }> = [];
+  const mk = (cat: string, name: string, value: string | null | undefined, kws: string[], structType: StructFieldType) => {
+    const v = value && String(value).trim() ? String(value).trim() : '';
+    if (!v) return;
+    out.push({
+      fieldKey: '', fieldName: name, fieldType: 'text', fieldCategory: cat, fieldValue: v,
+      matchKeywords: kws, enabled: true, readOnly: true, structType,
+    });
+  };
+  (cache?.cachedInternships || []).forEach((n: any) => {
+    const t = n.shortName || n.company || '实习';
+    mk('工作/实习经历', `${t}-单位名称`, n.company, ['单位名称', '公司名称', '实习单位', '工作单位', '单位', '公司', '企业', '雇主'], 'company');
+    mk('工作/实习经历', `${t}-职位名称`, n.position, ['职位名称', '岗位名称', '岗位', '职务', '职位'], 'position');
+    mk('工作/实习经历', `${t}-开始时间`, n.startDate, ['开始时间', '入职时间', '起始时间', '开始日期'], 'startDate');
+    mk('工作/实习经历', `${t}-结束时间`, n.endDate, ['结束时间', '离职时间', '截止时间', '结束日期'], 'endDate');
+    if (n.startDate || n.endDate) {
+      mk('工作/实习经历', `${t}-时间范围`, `${(n.startDate || '').replace(/-/g, '.')} - ${(n.endDate || '').replace(/-/g, '.')}`, ['时间范围', '实习时间', '任职时间', '起止时间'], 'dateRange');
+    }
+    mk('工作/实习经历', `${t}-部门`, n.department, ['部门', '所在部门'], 'other');
+    mk('工作/实习经历', `${t}-工作职责`, n.description, ['工作职责', '工作内容', '实习内容', '主要职责', '工作描述'], 'responsibility');
+    mk('工作/实习经历', `${t}-工作成果`, n.highlights, ['工作成果', '业绩', '实习成果'], 'responsibility');
+    mk('工作/实习经历', `${t}-证明人姓名`, n.certifierName, ['证明人', '证明人姓名', '联系人', '推荐人', '主管'], 'certifier');
+    mk('工作/实习经历', `${t}-证明人单位及职务`, n.certifierCompanyAndPosition, ['证明人单位', '单位及职务'], 'certifier');
+    mk('工作/实习经历', `${t}-证明人联系电话`, n.certifierPhone, ['证明人联系电话', '证明人电话', '联系人电话', '主管电话'], 'phone');
+    mk('工作/实习经历', `${t}-证明人邮箱`, n.certifierEmail, ['证明人邮箱'], 'email');
+  });
+  (cache?.cachedProjects || []).forEach((p: any) => {
+    const t = p.shortName || p.projectName || '项目';
+    mk('项目经历', `${t}-项目名称`, p.projectName, ['项目名称', '项目名'], 'projectName');
+    mk('项目经历', `${t}-项目角色`, p.role, ['项目角色', '担任角色', '角色'], 'other');
+    mk('项目经历', `${t}-开始时间`, p.startDate, ['开始时间', '项目开始'], 'startDate');
+    mk('项目经历', `${t}-结束时间`, p.endDate, ['结束时间', '项目结束'], 'endDate');
+    mk('项目经历', `${t}-技术栈`, p.techStack, ['技术栈', '使用技术', '技术'], 'other');
+    mk('项目经历', `${t}-项目描述`, p.projectIntro || p.description, ['项目描述', '项目简介', '项目介绍'], 'projectDesc');
+    mk('项目经历', `${t}-主要工作`, p.responsibilities, ['主要工作', '项目职责', '工作内容', '主要职责'], 'responsibility');
+    mk('项目经历', `${t}-项目成果`, p.result, ['项目成果', '项目业绩'], 'responsibility');
+  });
+  (cache?.cachedFamilyList || []).forEach((m: any) => {
+    const t = m.relation || '家庭成员';
+    mk('家庭成员', `${t}-姓名`, m.name, ['姓名'], 'personName');
+    mk('家庭成员', `${t}-单位`, m.company, ['单位', '工作单位'], 'company');
+    mk('家庭成员', `${t}-职务`, m.position, ['职务'], 'position');
+    mk('家庭成员', `${t}-联系电话`, m.phone, ['联系电话', '电话', '手机'], 'phone');
+  });
+  (cache?.cachedEmergencyContactList || []).forEach((c: any) => {
+    mk('紧急联系人', '紧急联系人-姓名', c.name, ['紧急联系人', '姓名'], 'personName');
+    mk('紧急联系人', '紧急联系人-电话', c.phone, ['联系电话', '电话', '手机'], 'phone');
+  });
+  return out;
+}
+
+/** 识别当前输入框的字段类型（label/nearbyText 为主，name/id 为辅） */
+function detectTargetFieldType(info: FieldInfo): StructFieldType | null {
+  const strong = [info.label, info.questionText, info.nearbyText, info.ariaLabel, info.placeholder, info.sectionTitle]
+    .filter(Boolean).join(' ');
+  const weak = `${info.name || ''} ${info.id || ''}`.toLowerCase();
+  const text = `${strong} ${weak}`;
+  const noCertifier = !/证明人|联系人|推荐人|主管/.test(text);
+  if (/证明人|联系人|推荐人|主管/.test(text)) return 'certifier';
+  if (/单位|公司|企业|雇主|company/.test(text) && noCertifier) return 'company';
+  if (/职位|岗位|职务|position|jobtitle/.test(text)) return 'position';
+  if (/开始时间|入职时间|起始|开始日期|startdate/.test(text)) return 'startDate';
+  if (/结束时间|离职时间|截止|结束日期|enddate/.test(text)) return 'endDate';
+  if (/项目名称/.test(text)) return 'projectName';
+  if (/项目描述|项目简介|项目介绍/.test(text)) return 'projectDesc';
+  if (/职责|工作内容|实习内容|主要工作/.test(text)) return 'responsibility';
+  if (/姓名/.test(text)) return 'personName';
+  if (/邮箱|email/i.test(text)) return 'email';
+  if (/手机|电话|联系方式/.test(text)) return 'phone';
+  return null;
+}
+
+/** 目标字段类型与候选类型的兼容性：短字段类型绝不接受整段描述类候选 */
+function structTypeCompatible(targetType: StructFieldType, c: CustomFieldItem & { structType?: StructFieldType }): boolean {
+  const COMPAT: Record<string, StructFieldType[]> = {
+    company: ['company'],
+    position: ['position'],
+    startDate: ['startDate', 'dateRange'],
+    endDate: ['endDate', 'dateRange'],
+    projectName: ['projectName'],
+    projectDesc: ['projectDesc', 'responsibility'],
+    responsibility: ['responsibility', 'projectDesc'],
+    certifier: ['certifier'],
+    personName: ['personName'],
+    email: ['email'],
+    phone: ['phone'],
+  };
+  if (!c.structType) {
+    // 普通自定义字段：短字段类型输入框不推荐长文本，防止整段描述填入单位/职位/日期等字段
+    if (['company', 'position', 'startDate', 'endDate', 'projectName', 'personName', 'email', 'phone'].includes(targetType)) {
+      return String(c.fieldValue || '').length <= 50;
+    }
+    return true;
+  }
+  const allow = COMPAT[targetType];
+  return allow ? allow.includes(c.structType) : true;
+}
+
+/** 结构化类型的中文标签（适配提示与强制填入确认用） */
+const STRUCT_TYPE_LABELS: Record<StructFieldType, string> = {
+  company: '单位名称', position: '职位名称', startDate: '开始时间', endDate: '结束时间',
+  dateRange: '时间范围', personName: '姓名', email: '邮箱', phone: '手机号',
+  responsibility: '职责/描述', projectName: '项目名称', projectDesc: '项目描述',
+  certifier: '证明人信息', other: '其他字段',
+};
+
+/** 卡片相对当前输入框的适配状态：适合 / 需确认 / 不建议 / 未选中输入框 */
+type FitState = 'fit' | 'confirm' | 'discourage' | 'unknown';
+
+/** 当前输入框字段类型（实时识别，用于卡片适配状态与强制填入冲突检查） */
+function currentTargetType(): StructFieldType | null {
+  const target = getCurrentTarget();
+  if (!target) return null;
+  const info = scanElement(target);
+  return info ? detectTargetFieldType(info) : null;
+}
+
+/** 根据字段名/内容推断普通自定义字段的内容类型（适配状态展示用） */
+function guessContentStructType(f: CustomFieldItem): StructFieldType | null {
+  const name = f.fieldName || '';
+  const value = String(f.fieldValue || '');
+  if (/单位名称|公司名称|公司|雇主|实习单位/.test(name)) return 'company';
+  if (/职位名称|岗位|职务|职位/.test(name)) return 'position';
+  if (/开始时间|开始日期|入职时间/.test(name)) return 'startDate';
+  if (/结束时间|结束日期|离职时间/.test(name)) return 'endDate';
+  if (/项目名称/.test(name)) return 'projectName';
+  if (/邮箱/.test(name)) return 'email';
+  if (/手机|电话|联系电话/.test(name)) return 'phone';
+  if (/姓名/.test(name) && value.length <= 20) return 'personName';
+  if (/职责|描述|成果|主要工作|内容/.test(name) && value.length > 50) return 'responsibility';
+  return null;
+}
+
+/** 候选内容对当前输入框的适配状态：类型完全匹配=适合；相近=需确认；冲突=不建议 */
+function candidateFitState(c: CustomFieldItem & { structType?: StructFieldType }): FitState {
+  const t = currentTargetType();
+  if (!t) return 'unknown';
+  const st = c.structType ?? guessContentStructType(c) ?? undefined;
+  if (st) {
+    if (structTypeCompatible(t, { ...c, structType: st })) return 'fit';
+    if (st === 'other' || st === 'dateRange') return 'confirm';
+    return 'discourage';
+  }
+  // 类型不可推断：短字段目标 + 长文本内容 → 不建议；其余需确认
+  const SHORT: StructFieldType[] = ['company', 'position', 'startDate', 'endDate', 'projectName', 'personName', 'email', 'phone'];
+  if (SHORT.includes(t) && String(c.fieldValue || '').length > 50) return 'discourage';
+  return 'confirm';
+}
+
+/** 适配状态标签文案与样式 */
+const FIT_TAG: Record<FitState, [string, string]> = {
+  fit: ['✓ 适合当前输入框', 'rf-fit-tag rf-fit-ok'],
+  confirm: ['可选·需确认', 'rf-fit-tag rf-fit-warn'],
+  discourage: ['⚠ 不建议填入', 'rf-fit-tag rf-fit-bad'],
+  unknown: ['', ''],
+};
 
 /** 渲染分类标签（含 最近使用/收藏内容/开放题素材 页签）+ 当前页签内容卡片 */
 function renderCards(): void {
@@ -1547,6 +2486,12 @@ function renderCards(): void {
   }
   cards.innerHTML = '';
 
+  // 搜索框有内容：默认全库搜索（不被当前页签限制），分组展示；页签仅用于浏览筛选，可勾选“仅搜当前分类”
+  if (cardSearchKeyword) {
+    renderSearchResults(cards, cardSearchKeyword);
+    return;
+  }
+
   if (currentCategory === '最近使用') {
     renderRecentCards(cards);
     return;
@@ -1560,6 +2505,21 @@ function renderCards(): void {
     return;
   }
 
+  // 结构化 record card：实习/项目分类先展示记录卡片（子字段可单独填入），下方继续追加该分类普通字段卡片
+  if (currentCategory === '工作/实习经历') renderInternshipRecordCards(cards);
+  if (currentCategory === '项目经历') renderProjectRecordCards(cards);
+
+  // tab 与当前输入框类型冲突提示：当前 tab 只是浏览筛选，不决定最终推荐类型
+  const targetTypeHint = currentTargetType();
+  const TAB_MISMATCH: Record<string, StructFieldType[]> = {
+    '项目经历': ['company', 'position', 'startDate', 'endDate', 'personName', 'email', 'phone'],
+    '工作/实习经历': ['projectName'],
+  };
+  if (targetTypeHint && (TAB_MISMATCH[currentCategory] || []).includes(targetTypeHint)) {
+    cards.appendChild(el('div', 'rf-fit-hint',
+      `当前输入框需要“${STRUCT_TYPE_LABELS[targetTypeHint]}”，当前页签内容不建议填入，请参考上方推荐区或切换记录子字段。`));
+  }
+
   const matchesSearch = (f: CustomFieldItem) => !cardSearchKeyword
     || (f.fieldName || '').toLowerCase().includes(cardSearchKeyword)
     || (f.fieldValue || '').toLowerCase().includes(cardSearchKeyword)
@@ -1567,6 +2527,9 @@ function renderCards(): void {
   const list = fields
     .filter((f) => (f.fieldCategory || '其他') === currentCategory && matchesSearch(f))
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  // 适配状态排序：适合当前输入框的卡片置顶，不建议填入的沉底（当前 tab 仅浏览筛选）
+  const fitRank: Record<FitState, number> = { fit: 0, confirm: 1, unknown: 1, discourage: 2 };
+  list.sort((a, b) => fitRank[candidateFitState(a)] - fitRank[candidateFitState(b)]);
   if (list.length === 0) {
     cards.appendChild(el('div', 'rf-empty', cardSearchKeyword ? '无匹配搜索结果' : '该分类暂无内容，可点击右上角“+ 新增字段”添加'));
     return;
@@ -1574,6 +2537,195 @@ function renderCards(): void {
   for (const f of list) {
     cards.appendChild(buildCard(f));
   }
+}
+
+/** 获取统一搜索索引：同步数据版本/字段数量变化时自动重建（只搜本地缓存，不请求后端） */
+function getSearchIndex(): SearchEntry[] {
+  const hash = `${cache?.currentDataHash || ''}|${cache?.currentProfileVersion || 0}|${(cache?.cachedFields || []).length}`;
+  if (!searchIndex || searchIndexHash !== hash) {
+    searchIndex = buildSearchIndex(cache);
+    searchIndexHash = hash;
+  }
+  return searchIndex;
+}
+
+/** 搜索条目相对当前输入框的适配状态（复用卡片适配逻辑：适合/需确认/不建议） */
+function entryFitState(entry: SearchEntry): FitState {
+  const pseudo: CustomFieldItem & { structType?: StructFieldType } = {
+    fieldKey: entry.fieldKey, fieldName: entry.fieldName, fieldType: 'text',
+    fieldCategory: entry.category, fieldValue: entry.content,
+    matchKeywords: entry.matchKeywords, enabled: true, readOnly: true,
+    structType: entry.structType as StructFieldType,
+  };
+  return candidateFitState(pseudo);
+}
+
+/** 搜索结果填入当前输入框：原字段走既有卡片填入；结构化子字段带类型守卫（冲突时二次确认） */
+function fillSearchResult(entry: SearchEntry): void {
+  if (entry.kind === 'field' && entry.refField) {
+    fillCardToTarget(entry.refField);
+    return;
+  }
+  const name = `${entry.recordName ? entry.recordName + '-' : ''}${entry.fieldName}`;
+  fillValueToTarget(entry.content, name, {
+    kind: entry.kind === 'material' ? 'material' : 'field',
+    refId: entry.materialId ?? entry.fieldId, fillType: 'manual',
+    structType: entry.structType as StructFieldType,
+  });
+}
+
+/**
+ * 全库搜索结果：按匹配质量分组（精确/同义词/内容/相关）展示；
+ * 联动当前输入框：适配结果置顶、不建议填入的沉底单独分组；默认前 50 条，可加载更多。
+ */
+function renderSearchResults(cards: HTMLElement, keyword: string): void {
+  const results = unifiedSearch(keyword, getSearchIndex(), { onlyCategory: searchTabOnly ? currentCategory : undefined });
+  cards.appendChild(el('div', 'rf-search-note',
+    searchTabOnly
+      ? `在分类「${currentCategory}」中搜索“${keyword}”：共 ${results.length} 条`
+      : `全库搜索“${keyword}”：共 ${results.length} 条（未限定当前页签，可勾选“仅搜当前分类”）`));
+  if (results.length === 0) {
+    renderSearchEmpty(cards, keyword);
+    return;
+  }
+
+  // 适配状态优先：适合当前输入框的置顶，不建议填入的沉底（仍可强制填入，二次确认）
+  const fitRank: Record<FitState, number> = { fit: 0, confirm: 1, unknown: 1, discourage: 2 };
+  const ranked = results.map((r) => ({ ...r, fit: entryFitState(r.entry) }))
+    .sort((a, b) => fitRank[a.fit] - fitRank[b.fit] || b.score - a.score);
+  const okItems = ranked.filter((r) => r.fit !== 'discourage');
+  const badItems = ranked.filter((r) => r.fit === 'discourage');
+
+  let shown = 0;
+  const tryAppend = (node: HTMLElement): boolean => {
+    if (shown >= searchResultLimit) return false;
+    cards.appendChild(node);
+    shown++;
+    return true;
+  };
+  for (const g of ['exact', 'synonym', 'content', 'related'] as SearchGroup[]) {
+    const items = okItems.filter((r) => r.group === g);
+    if (items.length === 0) continue;
+    cards.appendChild(el('div', 'rf-search-group-title', `${SEARCH_GROUP_LABELS[g]}（${items.length}）`));
+    for (const r of items) {
+      if (!tryAppend(buildSearchResultCard(r))) break;
+    }
+  }
+  if (badItems.length > 0) {
+    cards.appendChild(el('div', 'rf-search-group-title rf-search-group-bad', `不建议填入当前输入框（${badItems.length}，类型冲突）`));
+    for (const r of badItems) {
+      if (!tryAppend(buildSearchResultCard(r))) break;
+    }
+  }
+
+  const total = ranked.length;
+  if (shown < total) {
+    const btnMore = el('button', 'rf-btn rf-btn-small', `加载更多（已显示 ${shown}/${total}）`);
+    btnMore.addEventListener('click', () => {
+      searchResultLimit += 50;
+      renderCards();
+    });
+    cards.appendChild(btnMore);
+  }
+}
+
+/** 搜索结果单条：分类 / 记录名·子字段 / 内容预览 / 字数 / 适配标签 + 填入/临时编辑/复制/转到分类 */
+function buildSearchResultCard(r: ScoredSearchResult & { fit: FitState }): HTMLElement {
+  const entry = r.entry;
+  const card = el('div', 'rf-card rf-search-card');
+  const head = el('div', 'rf-card-head');
+  head.appendChild(el('span', 'rf-card-tag rf-card-tag-cat', entry.category));
+  const path = entry.recordName ? `${entry.recordName} · ${entry.fieldName}` : entry.fieldName;
+  head.appendChild(el('span', 'rf-card-name', path));
+  head.appendChild(el('span', 'rf-card-key', `${entry.content.length} 字`));
+  if (r.fit !== 'unknown') head.appendChild(el('span', FIT_TAG[r.fit][1], FIT_TAG[r.fit][0]));
+  card.appendChild(head);
+
+  const content = el('div', 'rf-card-content', entry.content);
+  content.title = entry.content;
+  card.appendChild(content);
+
+  // 调试模式可见：命中原因 / fieldKey / 类型 / 得分（简洁模式隐藏）
+  card.appendChild(el('div', 'rf-debug-info',
+    `命中：${r.reasons.join('，')} · 分组：${SEARCH_GROUP_LABELS[r.group]} · 得分：${r.score} · key：${entry.fieldKey || '-'} · 类型：${entry.structType}`));
+
+  const actions = el('div', 'rf-card-actions');
+  const btnFill = el('button', 'rf-btn rf-btn-tiny rf-btn-primary', '填入当前输入框');
+  btnFill.addEventListener('click', () => fillSearchResult(entry));
+  const btnTemp = el('button', 'rf-btn rf-btn-tiny', '临时编辑后填入');
+  btnTemp.addEventListener('click', () => tempEditDialog({
+    fieldKey: entry.fieldKey, fieldName: path, fieldType: 'text', fieldCategory: entry.category,
+    fieldValue: entry.content, matchKeywords: entry.matchKeywords, enabled: true, readOnly: true,
+  }));
+  const btnCopy = el('button', 'rf-btn rf-btn-tiny', '复制');
+  btnCopy.addEventListener('click', () => copyText(entry.content));
+  const btnJump = el('button', 'rf-btn rf-btn-tiny', `转到「${entry.category}」`);
+  btnJump.addEventListener('click', () => {
+    currentCategory = entry.category;
+    cardSearchKeyword = '';
+    const input = ui['card-search'] as HTMLInputElement;
+    if (input) input.value = '';
+    renderCards();
+  });
+  actions.append(btnFill, btnTemp, btnCopy, btnJump);
+  card.appendChild(actions);
+  return card;
+}
+
+/** 搜索为空时的引导：建议词 + 新增字段 / 新增素材 / 从当前输入框生成字段 */
+function renderSearchEmpty(cards: HTMLElement, keyword: string): void {
+  const box = el('div', 'rf-search-empty');
+  box.appendChild(el('div', 'rf-search-empty-title', `未找到与“${keyword}”相关的内容`));
+  box.appendChild(el('div', 'rf-search-empty-tip', '可尝试搜索：'));
+  const chips = el('div', 'rf-chips');
+  for (const s of SEARCH_SUGGESTIONS) {
+    const chip = el('button', 'rf-chip', s);
+    chip.addEventListener('click', () => {
+      const input = ui['card-search'] as HTMLInputElement;
+      if (input) input.value = s;
+      cardSearchKeyword = s.toLowerCase();
+      searchResultLimit = 50;
+      renderCards();
+    });
+    chips.appendChild(chip);
+  }
+  box.appendChild(chips);
+  const actions = el('div', 'rf-card-actions');
+  const btnNew = el('button', 'rf-btn rf-btn-tiny', '+ 新增字段');
+  btnNew.addEventListener('click', () => {
+    toggleNewForm();
+    ui['new-form']?.scrollIntoView({ block: 'nearest' });
+  });
+  const btnMaterial = el('button', 'rf-btn rf-btn-tiny', '+ 新增素材（管理后台）');
+  btnMaterial.addEventListener('click', () => setToast('开放题素材请在管理后台“开放题素材”页新增，同步后即可搜索', 'info'));
+  const btnFromTarget = el('button', 'rf-btn rf-btn-tiny', '从当前输入框生成字段');
+  btnFromTarget.addEventListener('click', () => openNewFormFromTarget());
+  actions.append(btnNew, btnMaterial, btnFromTarget);
+  box.appendChild(actions);
+  cards.appendChild(box);
+}
+
+/** 从当前输入框生成字段：打开新增表单并预填页面 label 与已有值 */
+function openNewFormFromTarget(): void {
+  const target = getCurrentTarget();
+  const info = target ? scanElement(target) : null;
+  if (!info) {
+    setToast('请先点击招聘网站中的一个输入框', 'warn');
+    return;
+  }
+  const form = ui['new-form'];
+  if (form.style.display === 'none') {
+    buildNewForm();
+    form.style.display = '';
+  }
+  const nameInput = form.querySelector('input.rf-edit-input') as HTMLInputElement | null;
+  const contentArea = form.querySelector('textarea.rf-edit-area') as HTMLTextAreaElement | null;
+  const label = info.label || info.placeholder || info.name || '未命名字段';
+  if (nameInput && !nameInput.value) nameInput.value = label;
+  const existing = target ? readElementText(target) : '';
+  if (contentArea && !contentArea.value && existing) contentArea.value = existing;
+  form.scrollIntoView({ block: 'nearest' });
+  setToast(`已从当前输入框预填字段名：${label}`, 'info');
 }
 
 /** 最近使用卡片（最多 10 条，可再次填入） */
@@ -1691,6 +2843,9 @@ function buildCard(f: CustomFieldItem): HTMLElement {
     btnDelete.addEventListener('click', () => doDeleteField(f));
     actions.append(btnFill, btnTemp, btnEdit, btnCopy, btnToggle, btnDelete);
   }
+  // 适配状态标签：当前输入框适合 / 需确认 / 不建议（未选中输入框时不显示）
+  const fit = candidateFitState(f);
+  if (fit !== 'unknown') actions.prepend(el('span', FIT_TAG[fit][1], FIT_TAG[fit][0]));
   card.appendChild(actions);
   return card;
 }
@@ -1707,6 +2862,7 @@ function fillCardToTarget(f: CustomFieldItem): void {
   }
   fillValueToTarget(f.fieldValue || '', f.fieldName, {
     kind: 'field', refId: f.id ?? null, fillType: 'manual',
+    structType: guessContentStructType(f) ?? undefined,
   });
 }
 
@@ -2195,6 +3351,10 @@ function selectEl(cls: string, options: Array<[string, string]>): HTMLSelectElem
 // ==================== 样式（Shadow DOM 内，完全隔离） ====================
 
 const PANEL_CSS = `
+:host {
+  --rf-fs: 14px;
+  --rf-lh: 1.5;
+}
 .rf-panel {
   position: fixed;
   display: flex;
@@ -2204,7 +3364,9 @@ const PANEL_CSS = `
   border: 1px solid #e5e6eb;
   border-radius: 10px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: var(--rf-fs, 14px);
+  line-height: var(--rf-lh, 1.5);
   z-index: ${Z_INDEX};
   overflow: hidden;
   box-sizing: border-box;
@@ -2224,10 +3386,10 @@ const PANEL_CSS = `
   font-size: 13px; line-height: 1; padding: 0;
 }
 .rf-icon-btn:hover { background: rgba(255,255,255,0.45); }
-.rf-body { padding: 10px 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.rf-body { padding: 10px 12px; overflow: auto; display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
 .rf-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .rf-user { color: #4e5969; }
-.rf-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.rf-badge { font-size: calc(var(--rf-fs, 14px) - 3px); padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
 .rf-badge-ok { background: #e8ffea; color: #00b42a; }
 .rf-badge-warn { background: #fff7e8; color: #ff7d00; }
 .rf-badge-err { background: #ffece8; color: #f53f3f; }
@@ -2237,19 +3399,19 @@ const PANEL_CSS = `
 .rf-select {
   flex: 1; min-width: 0; height: 28px; padding: 0 6px;
   border: 1px solid #e5e6eb; border-radius: 6px; background: #fff; color: #1f2329;
-  font-size: 12px;
+  font-size: calc(var(--rf-fs, 14px) - 2px);
 }
-.rf-select-tiny { flex: 1; height: 24px; font-size: 11px; }
+.rf-select-tiny { flex: 1; height: 24px; font-size: calc(var(--rf-fs, 14px) - 3px); }
 .rf-btn {
   border: 1px solid #e5e6eb; background: #fff; color: #1f2329;
-  border-radius: 6px; padding: 7px 10px; cursor: pointer; font-size: 13px;
+  border-radius: 6px; padding: 7px 10px; cursor: pointer; font-size: var(--rf-fs, 14px);
   transition: all 0.15s;
 }
 .rf-btn:hover { border-color: #409eff; color: #409eff; }
 .rf-btn-primary { background: #409eff; border-color: #409eff; color: #fff; }
 .rf-btn-primary:hover { background: #3387e0; color: #fff; }
 .rf-btn-small { padding: 5px 8px; font-size: 12px; }
-.rf-btn-tiny { padding: 2px 8px; font-size: 11px; flex: 0 0 auto; }
+.rf-btn-tiny { padding: 2px 8px; font-size: calc(var(--rf-fs, 14px) - 3px); flex: 0 0 auto; }
 .rf-quick-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .rf-subtitle { font-weight: 600; color: #4e5969; margin-top: 2px; }
 .rf-sync-info { color: #86909c; font-size: 12px; }
@@ -2258,7 +3420,7 @@ const PANEL_CSS = `
 .rf-report-row { display: flex; align-items: center; gap: 6px; }
 .rf-report-text { flex: 1; min-width: 0; color: #4e5969; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rf-details summary { cursor: pointer; color: #86909c; font-size: 12px; }
-.rf-details-body { white-space: pre-wrap; font-size: 11px; color: #86909c; max-height: 160px; overflow-y: auto; }
+.rf-details-body { white-space: pre-wrap; font-size: calc(var(--rf-fs, 14px) - 3px); color: #86909c; max-height: 160px; overflow-y: auto; }
 .rf-toast {
   border-radius: 6px; padding: 6px 10px; font-size: 12px; word-break: break-all;
 }
@@ -2270,7 +3432,7 @@ const PANEL_CSS = `
   position: fixed; width: 46px; height: 46px; border-radius: 50%;
   border: none; cursor: pointer; z-index: ${Z_INDEX};
   background: linear-gradient(135deg, #409eff, #36cfc9); color: #fff;
-  font-weight: 700; font-size: 13px;
+  font-weight: 700; font-size: var(--rf-fs, 14px);
   box-shadow: 0 4px 16px rgba(0,0,0,0.25);
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
 }
@@ -2286,7 +3448,7 @@ const PANEL_CSS = `
 .rf-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
 .rf-tab {
   border: 1px solid #e5e6eb; background: #fff; color: #4e5969;
-  border-radius: 12px; padding: 2px 8px; font-size: 11px; cursor: pointer;
+  border-radius: 12px; padding: 2px 8px; font-size: calc(var(--rf-fs, 14px) - 3px); cursor: pointer;
 }
 .rf-tab-active { background: #409eff; border-color: #409eff; color: #fff; }
 .rf-cards { display: flex; flex-direction: column; gap: 6px; }
@@ -2298,15 +3460,15 @@ const PANEL_CSS = `
 .rf-card-disabled { opacity: 0.6; }
 .rf-card-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .rf-card-name { font-weight: 600; font-size: 12px; }
-.rf-card-key { color: #86909c; font-size: 11px; }
-.rf-card-tag { font-size: 10px; padding: 0 6px; border-radius: 8px; }
+.rf-card-key { color: #86909c; font-size: calc(var(--rf-fs, 14px) - 3px); }
+.rf-card-tag { font-size: calc(var(--rf-fs, 14px) - 4px); padding: 0 6px; border-radius: 8px; }
 .rf-card-tag-off { background: #f2f3f5; color: #86909c; }
 .rf-card-content {
   font-size: 12px; color: #4e5969; max-height: 72px; overflow: hidden;
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
   word-break: break-all;
 }
-.rf-card-keywords { color: #86909c; font-size: 11px; word-break: break-all; }
+.rf-card-keywords { color: #86909c; font-size: calc(var(--rf-fs, 14px) - 3px); word-break: break-all; }
 .rf-card-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .rf-btn-danger { color: #f53f3f; }
 .rf-btn-danger:hover { border-color: #f53f3f; color: #f53f3f; }
@@ -2323,7 +3485,7 @@ const PANEL_CSS = `
 .rf-login-msg-err { color: #f53f3f; }
 .rf-login-msg-ok { color: #00b42a; }
 .rf-edit-row { display: flex; flex-direction: column; gap: 2px; }
-.rf-edit-label { color: #86909c; font-size: 11px; }
+.rf-edit-label { color: #86909c; font-size: calc(var(--rf-fs, 14px) - 3px); }
 .rf-edit-input {
   height: 28px; padding: 0 6px; border: 1px solid #e5e6eb; border-radius: 6px;
   font-size: 12px; background: #fff; color: #1f2329;
@@ -2359,7 +3521,22 @@ const PANEL_CSS = `
   display: flex; flex-direction: column; gap: 4px;
 }
 .rf-rec-meta { display: flex; flex-direction: column; gap: 2px; }
+/* ===== 投递记录采集区 ===== */
+.rf-track-box {
+  border: 1px solid #e5e6eb; border-radius: 8px; padding: 8px;
+  display: flex; flex-direction: column; gap: 4px; background: #fafbfc;
+}
+.rf-track-empty { color: #86909c; font-size: calc(var(--rf-fs, 14px) - 2px); line-height: 1.6; }
+.rf-track-row { display: flex; gap: 6px; font-size: calc(var(--rf-fs, 14px) - 2px); }
+.rf-track-label { flex: 0 0 84px; color: #86909c; flex-shrink: 0; }
+.rf-track-value { color: #1f2329; word-break: break-all; }
+.rf-track-msg { color: #165dff; background: #f0f7ff; border-radius: 6px; padding: 4px 8px; word-break: break-all; }
+.rf-track-edit { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .rf-preview-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.rf-preview-stats {
+  color: #4e5969; font-size: calc(var(--rf-fs, 14px) - 3px); line-height: 1.7;
+  background: #f7f8fa; border-radius: 6px; padding: 6px 8px;
+}
 .rf-preview-group-title {
   font-weight: 600; font-size: 12px; color: #165dff; background: #f0f7ff;
   border-radius: 4px; padding: 3px 8px; margin-top: 4px;
@@ -2372,20 +3549,97 @@ const PANEL_CSS = `
 .rf-preview-item-suspicious { border-color: #f53f3f; background: #fff7f6; }
 .rf-preview-meta { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .rf-preview-title { font-weight: 600; font-size: 12px; word-break: break-all; }
-.rf-preview-tags { color: #86909c; font-size: 11px; word-break: break-all; }
-.rf-preview-reason { color: #86909c; font-size: 11px; word-break: break-all; }
+.rf-preview-tags { color: #86909c; font-size: calc(var(--rf-fs, 14px) - 3px); word-break: break-all; }
+.rf-preview-reason { color: #86909c; font-size: calc(var(--rf-fs, 14px) - 3px); word-break: break-all; }
 .rf-preview-content {
   color: #4e5969; font-size: 12px; word-break: break-all;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+.rf-record-card { border-color: #bedaff; }
+.rf-struct-section { font-weight: 600; font-size: calc(var(--rf-fs, 14px) - 3px); color: #165dff; margin-top: 4px; }
+.rf-struct-row {
+  display: flex; flex-direction: column; gap: 2px;
+  border-top: 1px dashed #e5e6eb; padding-top: 4px;
+}
+.rf-struct-label { font-size: calc(var(--rf-fs, 14px) - 3px); color: #86909c; }
+.rf-struct-value { font-size: 12px; color: #1f2329; word-break: break-all; }
+.rf-struct-empty { color: #c9cdd4; }
+.rf-fit-tag { font-size: calc(var(--rf-fs, 14px) - 4px); border-radius: 3px; padding: 1px 5px; flex-shrink: 0; }
+.rf-fit-ok { background: #e8f7ee; color: #00a854; }
+.rf-fit-warn { background: #fff7e6; color: #ff7d00; }
+.rf-fit-bad { background: #fff1f0; color: #f53f3f; }
+.rf-fit-hint {
+  color: #ff7d00; font-size: calc(var(--rf-fs, 14px) - 3px); background: #fff7e6;
+  border-radius: 6px; padding: 5px 8px; margin-bottom: 4px;
+}
 .rf-edit-area-tall { min-height: 140px; }
-.rf-edit-counter { color: #86909c; font-size: 11px; text-align: right; }
+.rf-edit-counter { color: #86909c; font-size: calc(var(--rf-fs, 14px) - 3px); text-align: right; }
 .rf-btn-star { color: #c9cdd4; }
 .rf-btn-star-on { color: #ff7d00; border-color: #ffd77a; }
 .rf-card-tag-sens { background: #fff1f0; color: #f53f3f; }
-.rf-resize {
-  position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
-  cursor: nwse-resize; color: #c9cdd4; font-size: 10px; line-height: 16px;
-  text-align: center; user-select: none;
+/* ===== 边框缩放手柄（panelResizeService，拖动缩放与标题栏拖动互斥） ===== */
+.rf-panel.rf-resizing, .rf-panel.rf-resizing * { user-select: none !important; }
+.rf-resize-r { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: ew-resize; }
+.rf-resize-l { position: absolute; top: 0; left: 0; width: 6px; height: 100%; cursor: ew-resize; }
+.rf-resize-b { position: absolute; left: 0; bottom: 0; width: 100%; height: 6px; cursor: ns-resize; }
+.rf-resize-t { position: absolute; left: 0; top: 0; width: 100%; height: 4px; cursor: ns-resize; }
+.rf-resize-br {
+  position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, #c9cdd4 50%); border-bottom-right-radius: 10px;
 }
+/* ===== 滚动条（仅 Shadow DOM 内部，不影响页面） ===== */
+.rf-panel ::-webkit-scrollbar { width: 8px; height: 8px; }
+.rf-panel ::-webkit-scrollbar-thumb { background: #c9cdd4; border-radius: 4px; }
+.rf-panel ::-webkit-scrollbar-thumb:hover { background: #86909c; }
+.rf-panel ::-webkit-scrollbar-track { background: transparent; }
+.rf-panel ::-webkit-scrollbar-corner { background: transparent; }
+.rf-panel.rf-scroll-always .rf-body { overflow-x: scroll; }
+/* ===== 文本换行与溢出 ===== */
+.rf-card-content, .rf-struct-value, .rf-target-bar, .rf-toast { overflow-wrap: anywhere; }
+/* ===== 全库搜索结果 ===== */
+.rf-search-row { display: flex; align-items: center; gap: 8px; }
+.rf-search-row .rf-search { flex: 1; min-width: 0; }
+.rf-search-note { color: #165dff; background: #f0f7ff; border-radius: 6px; padding: 4px 8px; word-break: break-all; }
+.rf-search-group-title {
+  font-weight: 600; color: #4e5969; border-left: 3px solid #409eff;
+  padding-left: 6px; margin-top: 4px;
+}
+.rf-search-group-bad { border-left-color: #f53f3f; color: #f53f3f; }
+.rf-card-tag-cat { background: #f0f7ff; color: #165dff; }
+.rf-search-empty {
+  border: 1px dashed #c9cdd4; border-radius: 8px; padding: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.rf-search-empty-title { font-weight: 600; }
+.rf-search-empty-tip { color: #86909c; }
+.rf-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.rf-chip {
+  border: 1px solid #bedaff; background: #f0f7ff; color: #165dff;
+  border-radius: 12px; padding: 2px 10px; cursor: pointer;
+}
+.rf-chip:hover { background: #d6e8ff; }
+/* ===== 显示设置弹窗 ===== */
+.rf-settings-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.rf-settings-label { flex: 0 0 72px; color: #4e5969; }
+.rf-settings-custom { width: 96px; }
+/* ===== 显示模式（简洁/详细/调试） ===== */
+.rf-debug-info { display: none; color: #86909c; word-break: break-all; }
+.rf-panel.rf-mode-debug .rf-debug-info { display: block; }
+.rf-panel.rf-mode-simple .rf-card-keywords,
+.rf-panel.rf-mode-simple .rf-card-key,
+.rf-panel.rf-mode-simple .rf-target-detail { display: none; }
+/* ===== 响应式布局：<420 窄屏 / 420-640 标准 / >=640 宽屏双列 / 高度不足折叠次要区域 ===== */
+.rf-panel.rf-narrow .rf-quick-grid { grid-template-columns: repeat(2, 1fr); }
+.rf-panel.rf-narrow .rf-card-content { -webkit-line-clamp: 2; max-height: 40px; }
+.rf-panel.rf-wide .rf-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-items: start; }
+.rf-panel.rf-wide .rf-cards > .rf-record-card,
+.rf-panel.rf-wide .rf-cards > .rf-search-group-title,
+.rf-panel.rf-wide .rf-cards > .rf-search-note,
+.rf-panel.rf-wide .rf-cards > .rf-search-empty,
+.rf-panel.rf-wide .rf-cards > .rf-fit-hint,
+.rf-panel.rf-wide .rf-cards > .rf-empty,
+.rf-panel.rf-wide .rf-cards > .rf-btn,
+.rf-panel.rf-wide .rf-cards > .rf-card-actions { grid-column: 1 / -1; }
+.rf-panel.rf-short .rf-quick-grid { display: none; }
+.rf-panel.rf-short .rf-search-row { position: sticky; top: -10px; z-index: 2; background: #fff; padding-top: 2px; }
 `;

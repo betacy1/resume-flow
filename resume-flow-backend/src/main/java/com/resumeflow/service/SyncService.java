@@ -1,6 +1,8 @@
 package com.resumeflow.service;
 
 import com.resumeflow.dto.ContentVariantDTO;
+import com.resumeflow.dto.InternshipExperienceDTO;
+import com.resumeflow.dto.ProjectExperienceDTO;
 import com.resumeflow.dto.TemplateExperienceConfigDTO;
 import com.resumeflow.dto.UserCustomFieldDTO;
 import com.resumeflow.entity.ContentVariant;
@@ -71,8 +73,9 @@ public class SyncService {
         payload.put("updatedAt", syncStatus.get("updatedAt"));
         payload.put("basicInfo", profile.getBasicInfo());
         payload.put("educationList", profile.getEducationList());
-        payload.put("internshipList", profile.getInternshipList());
-        payload.put("projectList", profile.getProjectList());
+        // 实习/项目：结构化子字段 + 别名字段 + 各字数版本变体挂载，插件手动/自动填充共用同一份结构化数据
+        payload.put("internshipList", enrichInternships(profile.getInternshipList(), variants));
+        payload.put("projectList", enrichProjects(profile.getProjectList(), variants));
         payload.put("skillList", profile.getSkillList());
         payload.put("awardList", profile.getAwardList());
         payload.put("familyList", profile.getFamilyList());
@@ -98,5 +101,112 @@ public class SyncService {
         dto.setContent(e.getContent());
         dto.setEnabled(e.getEnabled());
         return dto;
+    }
+
+    private static boolean hasText(String s) {
+        return s != null && !s.isBlank();
+    }
+
+    /** 时间范围：2025-11 → 2025.11 格式拼接 */
+    private String formatDateRange(String start, String end) {
+        if (!hasText(start) && !hasText(end)) {
+            return "";
+        }
+        String s = hasText(start) ? start.replace('-', '.') : "";
+        String e = hasText(end) ? end.replace('-', '.') : "";
+        return s + " - " + e;
+    }
+
+    private List<ContentVariantDTO> pickVariants(List<ContentVariantDTO> variants, String sourceType,
+                                                 Long sourceId, List<String> fieldTypes) {
+        if (sourceId == null) {
+            return List.of();
+        }
+        return variants.stream()
+                .filter(v -> sourceType.equals(v.getSourceType()) && sourceId.equals(v.getSourceId())
+                        && fieldTypes.contains(v.getFieldType()))
+                .toList();
+    }
+
+    /**
+     * 实习经历结构化下发：保留原有字段（company/position 等，兼容存量插件）+
+     * 别名字段（recordName/companyName/positionName/jobTitle/dateRange/city）+
+     * 职责/成果/合并版的多字数版本变体。
+     */
+    private List<Map<String, Object>> enrichInternships(List<InternshipExperienceDTO> list,
+                                                        List<ContentVariantDTO> variants) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (InternshipExperienceDTO n : list) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", n.getId());
+            m.put("recordName", hasText(n.getShortName()) ? n.getShortName() : n.getCompany());
+            m.put("companyName", n.getCompany());
+            m.put("company", n.getCompany());
+            m.put("positionName", n.getPosition());
+            m.put("position", n.getPosition());
+            m.put("jobTitle", n.getPosition());
+            m.put("startDate", n.getStartDate());
+            m.put("endDate", n.getEndDate());
+            m.put("dateRange", formatDateRange(n.getStartDate(), n.getEndDate()));
+            m.put("department", n.getDepartment());
+            m.put("city", n.getCity());
+            m.put("techStack", n.getTechStack());
+            m.put("description", n.getDescription());
+            m.put("highlights", n.getHighlights());
+            m.put("shortName", n.getShortName());
+            m.put("sortOrder", n.getSortOrder());
+            m.put("certifierName", n.getCertifierName());
+            m.put("certifierCompany", n.getCertifierCompany());
+            m.put("certifierPosition", n.getCertifierPosition());
+            m.put("certifierCompanyAndPosition", n.getCertifierCompanyAndPosition());
+            m.put("certifierPhone", n.getCertifierPhone());
+            m.put("certifierEmail", n.getCertifierEmail());
+            m.put("certifierRelation", n.getCertifierRelation());
+            m.put("certifierRemark", n.getCertifierRemark());
+            m.put("responsibilityVariants", pickVariants(variants, "internship", n.getId(),
+                    List.of("internship_responsibility")));
+            m.put("resultVariants", pickVariants(variants, "internship", n.getId(),
+                    List.of("internship_result")));
+            m.put("combinedVariants", pickVariants(variants, "internship", n.getId(),
+                    List.of("internship_combined", "combined")));
+            out.add(m);
+        }
+        return out;
+    }
+
+    /**
+     * 项目经历结构化下发：原有字段 + dateRange 别名 +
+     * 描述/主要工作/成果/合并版的多字数版本变体。
+     */
+    private List<Map<String, Object>> enrichProjects(List<ProjectExperienceDTO> list,
+                                                     List<ContentVariantDTO> variants) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (ProjectExperienceDTO p : list) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", p.getId());
+            m.put("recordName", hasText(p.getShortName()) ? p.getShortName() : p.getProjectName());
+            m.put("projectName", p.getProjectName());
+            m.put("role", p.getRole());
+            m.put("startDate", p.getStartDate());
+            m.put("endDate", p.getEndDate());
+            m.put("dateRange", formatDateRange(p.getStartDate(), p.getEndDate()));
+            m.put("techStack", p.getTechStack());
+            m.put("description", p.getDescription());
+            m.put("projectIntro", p.getProjectIntro());
+            m.put("responsibilities", p.getResponsibilities());
+            m.put("result", p.getResult());
+            m.put("shortName", p.getShortName());
+            m.put("sortOrder", p.getSortOrder());
+            m.put("descriptionVariants", pickVariants(variants, "project", p.getId(),
+                    List.of("project_overview")));
+            m.put("responsibilityVariants", pickVariants(variants, "project", p.getId(),
+                    List.of("project_responsibility")));
+            m.put("resultVariants", pickVariants(variants, "project", p.getId(),
+                    List.of("project_result")));
+            m.put("combinedVariants", pickVariants(variants, "project", p.getId(),
+                    List.of("project_combined", "combined")));
+            out.add(m);
+        }
+        return out;
     }
 }

@@ -175,6 +175,10 @@ export interface MatchResult {
   recordName?: string;
   /** 预览分组：work_experience / project_experience / skill / material / education / basic */
   group?: string;
+  /** 疑似错误：值类型与字段语义冲突（后端类型校验），默认不勾选 */
+  suspicious?: boolean;
+  /** 疑似错误原因 */
+  suspiciousReason?: string;
 }
 
 /** 当前模板应填经历计划项（有序） */
@@ -304,4 +308,41 @@ export async function getSkills(): Promise<{
   variants: Array<{ id: number; audienceType: string; fieldType: string; lengthType: string; content: string }>;
 }> {
   return request('/api/skills');
+}
+
+// ==================== 投递信息表采集接口（/api/application-records） ====================
+
+/** 插件采集投递信息请求体 */
+export interface ApplicationCapturePayload {
+  companyName?: string;
+  organizationName?: string;
+  positionName?: string;
+  pageUrl?: string;
+  pageTitle?: string;
+  domain?: string;
+  recruitmentUrl?: string;
+  resumeEditUrl?: string;
+  resumeModifiedAt?: string;
+  resumeModifiedSource?: string;
+  detectedAt?: string;
+  source?: string;
+  confidenceScore?: number;
+  /** 用户在插件中确认后强制保存（低置信度也入库） */
+  confirmed?: boolean;
+}
+
+/** 采集结果：created=新增 / updated=已存在仅更新 / need_confirm=需用户确认 */
+export interface ApplicationCaptureResult {
+  action: 'created' | 'updated' | 'need_confirm';
+  recordId?: number;
+  applyStatus?: string;
+  matchedSummary?: string;
+  message?: string;
+}
+
+export async function captureApplication(data: ApplicationCapturePayload): Promise<ApplicationCaptureResult> {
+  return request<ApplicationCaptureResult>('/api/application-records/capture', {
+    method: 'POST',
+    body: JSON.stringify({ source: 'plugin', detectedAt: new Date().toISOString(), ...data }),
+  });
 }

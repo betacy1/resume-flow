@@ -11,6 +11,8 @@ public class InternshipExperienceDTO {
     private Long id;
     private String company;
     private String department;
+    /** 工作地点（城市） */
+    private String city;
     private String position;
     private String startDate;
     private String endDate;

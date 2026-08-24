@@ -22,6 +22,24 @@ export interface PanelState {
   lastSyncTime: string | null;
   /** 宽屏编辑模式（宽度 640，适合长文本编辑与新增字段） */
   wideMode: boolean;
+  /** 是否最大化（再点还原上次尺寸） */
+  maximized: boolean;
+  /** 最大化前的尺寸（还原用） */
+  preMaxRect: { x: number; y: number; width: number; height: number } | null;
+  /** 字号预设：小 12 / 标准 14 / 大 16 / 超大 18 / 自定义 */
+  fontSizePreset: 'small' | 'normal' | 'large' | 'xlarge' | 'custom';
+  /** 面板整体字号（px，12-22，仅作用于 Shadow DOM 内部） */
+  fontSize: number;
+  /** 行高：紧凑 1.3 / 标准 1.5 / 宽松 1.8 */
+  lineHeight: 'compact' | 'normal' | 'loose';
+  /** 内容显示模式：简洁（标题+摘要）/ 详细 / 调试（fieldKey、命中原因） */
+  displayMode: 'simple' | 'detail' | 'debug';
+  /** 横向滚动条：自动 / 始终显示 */
+  scrollbarMode: 'auto' | 'always';
+  /** 搜索是否仅限当前分类（默认全库搜索） */
+  searchTabOnly: boolean;
+  /** 最近一次状态更新时间 */
+  lastUpdatedAt: string;
 }
 
 export const DEFAULT_PANEL_STATE: PanelState = {
@@ -29,7 +47,7 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   minimized: false,
   x: -1,
   y: 96,
-  width: 336,
+  width: 380,
   height: 560,
   selectedTemplateId: null,
   selectedAudienceType: '',
@@ -37,6 +55,15 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   selectedPriorityExperience: null,
   lastSyncTime: null,
   wideMode: false,
+  maximized: false,
+  preMaxRect: null,
+  fontSizePreset: 'normal',
+  fontSize: 14,
+  lineHeight: 'normal',
+  displayMode: 'detail',
+  scrollbarMode: 'auto',
+  searchTabOnly: false,
+  lastUpdatedAt: '',
 };
 
 /** 读取面板状态（不存在时返回默认值，首次打开时面板默认靠右显示） */
@@ -53,7 +80,7 @@ export function getPanelState(): Promise<PanelState> {
 export function savePanelState(patch: Partial<PanelState>): Promise<void> {
   return new Promise((resolve) => {
     chrome.storage.local.get([STATE_KEY], (result) => {
-      const merged = { ...DEFAULT_PANEL_STATE, ...(result[STATE_KEY] || {}), ...patch };
+      const merged = { ...DEFAULT_PANEL_STATE, ...(result[STATE_KEY] || {}), ...patch, lastUpdatedAt: new Date().toISOString() };
       chrome.storage.local.set({ [STATE_KEY]: merged }, () => resolve());
     });
   });

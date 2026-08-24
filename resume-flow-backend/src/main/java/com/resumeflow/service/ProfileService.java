@@ -197,6 +197,7 @@ public class ProfileService {
         }
         entity.setCompany(dto.getCompany());
         entity.setDepartment(dto.getDepartment());
+        entity.setCity(dto.getCity());
         entity.setPosition(dto.getPosition());
         entity.setStartDate(dto.getStartDate());
         entity.setEndDate(dto.getEndDate());
@@ -488,6 +489,7 @@ public class ProfileService {
         dto.setId(e.getId());
         dto.setCompany(e.getCompany());
         dto.setDepartment(e.getDepartment());
+        dto.setCity(e.getCity());
         dto.setPosition(e.getPosition());
         dto.setStartDate(e.getStartDate());
         dto.setEndDate(e.getEndDate());
