@@ -37,3 +37,15 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### ResumeFlow 部署/构建产物与运行时数据 ###
+node_modules/
+dist/
+*.zip
+*.log
+# H2 本地数据库文件（含演示数据，禁止入库）
+resume-flow-backend/data/
+# 误克隆到后端子目录的旧仓库副本（嵌套 git 仓库）
+resume-flow-backend/resume-flow/
+# IDE 目录整体忽略
+.idea/

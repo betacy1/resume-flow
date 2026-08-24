@@ -84,8 +84,9 @@ function detectWordLimit(el: HTMLElement): number | undefined {
     findLabel(el),
   ].join(' ');
   const patterns = [
-    /(?:不超过|最多|限制在|限)\s*(\d{2,4})\s*字/g,
+    /(?:不超过|最多|限制在|限|请输入)\s*(\d{2,4})\s*字/g,
     /(\d{2,4})\s*字(?:以内|内|左右|以下)/g,
+    /\/\s*(\d{2,4})(?!\d)/g,
   ];
   for (const pattern of patterns) {
     let m: RegExpExecArray | null;

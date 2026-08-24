@@ -121,7 +121,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-/** 以扩展身份调用后端接口（自动附加 token） */
+/** 以扩展身份调用后端接口（自动附加 token）；409 冲突体透传给面板供冲突处理 */
 async function proxyRequest(path: string, method: string, body?: any): Promise<any> {
   const backendUrl = await getBackendUrl();
   const auth = await getAuth();
@@ -135,7 +135,15 @@ async function proxyRequest(path: string, method: string, body?: any): Promise<a
     body: body != null ? JSON.stringify(body) : undefined,
   });
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    let result: any = null;
+    try {
+      result = await response.json();
+    } catch { /* 非 JSON 响应 */ }
+    if (response.status === 409) {
+      // 冲突体透传：面板据此弹出“拉取最新 / 覆盖保存”
+      return { __rfStatus: 409, message: result?.message || '数据冲突', data: result?.data ?? null };
+    }
+    throw new Error(result?.message || `HTTP ${response.status}: ${response.statusText}`);
   }
   const result = await response.json();
   if (result.code !== 200) {

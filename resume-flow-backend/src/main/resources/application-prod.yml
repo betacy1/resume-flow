@@ -12,7 +12,9 @@ spring:
     defer-datasource-initialization: true
   sql:
     init:
-      mode: always
+      # demo 数据由 DemoDataInitializer 初始化；不能执行 data-mysql.sql，
+      # 否则每次启动会 REPLACE INTO 回滚用户在管理端修改的模板/字段/素材
+      mode: never
       platform: mysql
       continue-on-error: true
 

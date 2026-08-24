@@ -50,6 +50,7 @@ public class UserCustomFieldService {
         Long userId = SecurityUtils.getCurrentUserId();
         UserCustomField entity = getById(id, userId);
         applyDTO(entity, dto);
+        entity.setVersion(entity.getVersion() == null ? 1L : entity.getVersion() + 1);
         userCustomFieldRepository.save(entity);
         versionService.bump(userId);
     }
@@ -78,6 +79,30 @@ public class UserCustomFieldService {
                 .orElseThrow(() -> new BusinessException("字段不存在"));
     }
 
+    /** 实体 → DTO（供插件字段服务复用） */
+    public UserCustomFieldDTO toDTO(UserCustomField entity) {
+        UserCustomFieldDTO dto = new UserCustomFieldDTO();
+        dto.setId(entity.getId());
+        dto.setTemplateId(entity.getTemplateId());
+        dto.setFieldKey(entity.getFieldKey());
+        dto.setFieldName(entity.getFieldName());
+        dto.setFieldType(entity.getFieldType());
+        dto.setFieldCategory(entity.getFieldCategory());
+        dto.setFieldValue(entity.getFieldValue());
+        dto.setMatchKeywords(fromJson(entity.getMatchKeywords()));
+        dto.setTemplateIds(fromLongJson(entity.getTemplateIds()));
+        dto.setLengthType(entity.getLengthType());
+        dto.setAutoFillEnabled(entity.getAutoFillEnabled());
+        dto.setManualFillEnabled(entity.getManualFillEnabled());
+        dto.setVersion(entity.getVersion());
+        dto.setSourceRef(entity.getSourceRef());
+        dto.setSensitive(entity.getSensitive());
+        dto.setEnabled(entity.getEnabled());
+        dto.setSortOrder(entity.getSortOrder());
+        dto.setUpdateTime(entity.getUpdateTime());
+        return dto;
+    }
+
     /**
      * 为字段追加匹配关键词（插件手动绑定页面字段时形成新匹配规则）
      */
@@ -99,7 +124,7 @@ public class UserCustomFieldService {
         }
     }
 
-    private void applyDTO(UserCustomField entity, UserCustomFieldDTO dto) {
+    public void applyDTO(UserCustomField entity, UserCustomFieldDTO dto) {
         if (!hasText(dto.getFieldKey())) {
             throw new BusinessException("fieldKey 不能为空");
         }
@@ -116,28 +141,14 @@ public class UserCustomFieldService {
         entity.setFieldCategory(dto.getFieldCategory());
         entity.setFieldValue(dto.getFieldValue());
         entity.setMatchKeywords(toJson(dto.getMatchKeywords()));
+        entity.setTemplateIds(toLongJson(dto.getTemplateIds()));
+        entity.setLengthType(dto.getLengthType());
+        entity.setAutoFillEnabled(dto.getAutoFillEnabled() == null || dto.getAutoFillEnabled());
+        entity.setManualFillEnabled(dto.getManualFillEnabled() == null || dto.getManualFillEnabled());
         entity.setSourceRef(dto.getSourceRef());
         entity.setSensitive(Boolean.TRUE.equals(dto.getSensitive()));
         entity.setEnabled(dto.getEnabled() == null || dto.getEnabled());
         entity.setSortOrder(dto.getSortOrder() == null ? 0 : dto.getSortOrder());
-    }
-
-    private UserCustomFieldDTO toDTO(UserCustomField entity) {
-        UserCustomFieldDTO dto = new UserCustomFieldDTO();
-        dto.setId(entity.getId());
-        dto.setTemplateId(entity.getTemplateId());
-        dto.setFieldKey(entity.getFieldKey());
-        dto.setFieldName(entity.getFieldName());
-        dto.setFieldType(entity.getFieldType());
-        dto.setFieldCategory(entity.getFieldCategory());
-        dto.setFieldValue(entity.getFieldValue());
-        dto.setMatchKeywords(fromJson(entity.getMatchKeywords()));
-        dto.setSourceRef(entity.getSourceRef());
-        dto.setSensitive(entity.getSensitive());
-        dto.setEnabled(entity.getEnabled());
-        dto.setSortOrder(entity.getSortOrder());
-        dto.setUpdateTime(entity.getUpdateTime());
-        return dto;
     }
 
     private String toJson(List<String> keywords) {
@@ -149,6 +160,28 @@ public class UserCustomFieldService {
             return objectMapper.writeValueAsString(safeKeywords);
         } catch (JsonProcessingException e) {
             throw new BusinessException("匹配关键词格式错误");
+        }
+    }
+
+    private String toLongJson(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(ids);
+        } catch (JsonProcessingException e) {
+            throw new BusinessException("模板 id 列表格式错误");
+        }
+    }
+
+    private List<Long> fromLongJson(String json) {
+        if (!hasText(json)) {
+            return Collections.emptyList();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<>() {});
+        } catch (JsonProcessingException e) {
+            return Collections.emptyList();
         }
     }
 

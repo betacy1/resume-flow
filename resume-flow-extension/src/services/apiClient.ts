@@ -82,9 +82,15 @@ export interface CustomFieldItem {
   fieldCategory?: string;
   fieldValue?: string;
   matchKeywords: string[];
+  templateIds?: number[];
+  lengthType?: string;
+  autoFillEnabled?: boolean;
+  manualFillEnabled?: boolean;
+  version?: number;
   sensitive?: boolean;
   enabled?: boolean;
   sortOrder?: number;
+  updateTime?: string;
 }
 
 export async function getCustomFields(templateId?: number): Promise<CustomFieldItem[]> {
@@ -97,6 +103,37 @@ export async function updateCustomField(id: number, data: CustomFieldItem): Prom
     method: 'PUT',
     body: JSON.stringify(data),
   });
+}
+
+// ==================== 插件字段接口（/api/plugin/fields） ====================
+
+/** 409 冲突：服务端版本更新，携带服务端最新字段 */
+export class ConflictError extends Error {
+  serverField: CustomFieldItem;
+  constructor(message: string, serverField: CustomFieldItem) {
+    super(message);
+    this.serverField = serverField;
+  }
+}
+
+/** 字段写操作结果：同步状态 + 字段最新快照 */
+export interface PluginFieldWriteResult {
+  success: boolean;
+  id?: number;
+  field?: CustomFieldItem;
+  profileVersion: number;
+  dataHash: string;
+  updatedAt: string;
+  /** 内容质量检查提醒（超字数/英文大小写，不阻断保存） */
+  warnings?: string[];
+}
+
+/** 识别 background 代理透传的 409 冲突体，其余原样返回（面板侧使用） */
+export function unwrapOrConflict<T>(data: any): T {
+  if (data && data.__rfStatus === 409) {
+    throw new ConflictError(data.message || '该内容已在网页端更新', data.data as CustomFieldItem);
+  }
+  return data as T;
 }
 
 export interface FieldInfo {

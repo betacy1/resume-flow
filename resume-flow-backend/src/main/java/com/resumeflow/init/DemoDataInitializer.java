@@ -308,7 +308,7 @@ public class DemoDataInitializer implements CommandLineRunner {
     private List<InternshipExperience> initInternships(Long userId) {
         List<InternshipDef> defs = List.of(
                 new InternshipDef("中国工商银行北京市分行", "移动金融建设部", "金融科技", "2026-07-01", "2026-08-31",
-                        "Java / Spring Boot / JPA / Redis / Vue3 / TypeScript / Vite / PaaS / Harbor / Apollo / ETCD / HAProxy",
+                        "Java / Spring Boot / JPA / Redis / Vue3 / TypeScript / Vite / PaaS / Harbor / Apollo / ETCD / HAProxy / RESTful API",
                         "参与研发企业级 DevOps 一体化交付平台，围绕持续交付、精准出版、自动投验、生产发布、环境路由切换、任务审计及存量系统跨集群批量迁移等场景，负责后端领域建模、接口设计、基础设施客户端封装及发布任务可靠性建设，推动交付流程标准化、自动化与可追溯。",
                         "形成统一一体化交付入口，通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制，减少多平台切换与人工操作成本，提升发布任务可靠性与可追溯性。",
                         "工行"),
@@ -870,22 +870,38 @@ public class DemoDataInitializer implements CommandLineRunner {
             }
             saveInternVariants(userId, internship, tpl);
         }
-        // 项目经历：每个受众生成 描述/职责/成果/技术栈 四类字段版本（全部受众全量生成，不做排除）
+        // 项目经历：每个受众生成 描述/职责/成果/技术栈/合并型 字段版本；
+        // 命中预置文案模板（PROJECT_TPL）时使用模板全文，否则回退实体字段合成（全部受众全量生成，不做排除）
         for (ProjectExperience project : projects) {
+            ProjectTpl pt = PROJECT_TPL.get(nz(project.getProjectName()));
             for (String audience : AUDIENCES_ALL) {
                 saveVariant(userId, "project", project.getId(), audience, "general", "project_overview",
-                        "within_300", truncate(nz(project.getProjectIntro()), 300));
+                        "within_300", truncate(firstNonBlank(pt == null ? null : pt.ov300(),
+                                nz(project.getProjectIntro())), 300));
                 saveVariant(userId, "project", project.getId(), audience, "general", "project_responsibility",
-                        "within_500", truncate(nz(project.getResponsibilities()), 500));
+                        "within_500", truncate(firstNonBlank(pt == null ? null : pt.resp500(),
+                                nz(project.getResponsibilities())), 500));
                 saveVariant(userId, "project", project.getId(), audience, "general", "project_result",
-                        "within_200", truncate(nz(project.getResult()), 200));
+                        "within_200", truncate(firstNonBlank(pt == null ? null : pt.res200(),
+                                nz(project.getResult())), 200));
                 saveVariant(userId, "project", project.getId(), audience, "general", "project_tech_stack",
-                        "within_200", truncate(nz(project.getTechStack()), 200));
+                        "within_200", truncate(firstNonBlank(pt == null ? null : pt.techStack(),
+                                nz(project.getTechStack())), 200));
                 for (String length : LENGTHS) {
-                    String full = nz(project.getProjectIntro()) + "\n主要职责：\n" + nz(project.getResponsibilities())
-                            + "\n项目成果：" + nz(project.getResult());
+                    String combined;
+                    if (pt != null) {
+                        combined = switch (length) {
+                            case "within_200" -> pt.comb200();
+                            case "within_300" -> pt.comb300();
+                            case "within_500" -> pt.comb500();
+                            default -> pt.comb1000();
+                        };
+                    } else {
+                        combined = nz(project.getProjectIntro()) + "\n主要职责：\n" + nz(project.getResponsibilities())
+                                + "\n项目成果：" + nz(project.getResult());
+                    }
                     saveVariant(userId, "project", project.getId(), audience, "general", "project_combined",
-                            length, truncate(full, limitOf(length)));
+                            length, truncate(combined, limitOf(length)));
                 }
             }
         }
@@ -916,35 +932,31 @@ public class DemoDataInitializer implements CommandLineRunner {
     /** 为一段实习生成各受众 × 字段类型 × 字数的内容版本 */
     private void saveInternVariants(Long userId, InternshipExperience internship, InternshipTpl tpl) {
         Long id = internship.getId();
-        // 200 字档：合并/职责/成果/技术栈 四类字段，各受众共用（字数优先）
+        // 200 字档：合并/职责/成果/技术栈 四类字段（模板提供受众级文案时按受众取，否则共用）
         for (String audience : tpl.audiences) {
-            saveVariant(userId, "internship", id, audience, "general", "internship_combined", "within_200", tpl.comb200);
-            saveVariant(userId, "internship", id, audience, "general", "internship_responsibility", "within_200", tpl.resp200);
-            saveVariant(userId, "internship", id, audience, "general", "internship_result", "within_200", tpl.res200);
+            InternshipTpl.Aud aud = tpl.aud(audience);
+            saveVariant(userId, "internship", id, audience, "general", "internship_combined", "within_200",
+                    firstNonBlank(aud == null ? null : aud.comb200(), tpl.comb200));
+            saveVariant(userId, "internship", id, audience, "general", "internship_responsibility", "within_200",
+                    firstNonBlank(aud == null ? null : aud.resp200(), tpl.resp200));
+            saveVariant(userId, "internship", id, audience, "general", "internship_result", "within_200",
+                    firstNonBlank(aud == null ? null : aud.res200(), tpl.res200));
             saveVariant(userId, "internship", id, audience, "general", "internship_tech_stack", "within_200",
-                    truncate(nz(internship.getTechStack()), 200));
+                    truncate(firstNonBlank(aud == null ? null : aud.techStack(), nz(internship.getTechStack())), 200));
         }
-        // 300/500/1000 字档：按受众 × 岗位方向（backend / ai）生成，未提供原文的格子回退合成或截断兜底（绝不超限）
+        // 300/500/1000 字档：按受众 × 岗位方向（backend / ai）生成；
+        // 受众级方向文案优先，未提供时回退共用方向文案/受众维度/截断兜底（绝不超限）
         for (String audience : tpl.audiences) {
             for (String direction : List.of("backend", "ai")) {
                 saveVariant(userId, "internship", id, audience, direction, "internship_overview", "within_300",
-                        truncate(firstNonBlank(tpl.ov300, tpl.comb200), 300));
-                String comb500 = firstNonBlank(tpl.comb500ByAudience(audience),
-                        compose500(tpl.ov300ByAudience(audience), tpl.resp200, tpl.res200));
+                        truncate(firstNonBlank(tpl.ov300For(audience, direction), tpl.comb200), 300));
+                String comb500 = firstNonBlank(tpl.comb500For(audience, direction), tpl.comb200);
                 saveVariant(userId, "internship", id, audience, direction, "internship_combined", "within_500",
                         truncate(comb500, 500));
                 saveVariant(userId, "internship", id, audience, direction, "internship_combined", "within_1000",
-                        truncate(firstNonBlank(tpl.comb1000ByAudience(audience), comb500), 1000));
+                        truncate(firstNonBlank(tpl.comb1000For(audience, direction), comb500), 1000));
             }
         }
-    }
-
-    /** 500 字合成：300 字描述 + 分条职责 + 成果 */
-    private String compose500(String ov300, String resp200, String res200) {
-        if (!hasText(ov300)) {
-            return resp200 + "\n" + res200;
-        }
-        return ov300 + "\n主要职责包括：\n" + resp200 + "\n" + res200;
     }
 
     private String firstNonBlank(String... values) {
@@ -1003,26 +1015,64 @@ public class DemoDataInitializer implements CommandLineRunner {
 
     private static final List<String> AUDIENCES_ALL = List.of("big_tech", "state_owned", "bank", "general");
 
-    /** 实习内容模板：按受众组合提供不同场景风格的原文 */
+    /**
+     * 实习内容模板。两类供给方式：
+     * 1）共用字段（comb200/resp200/res200 + ov300Backend 等方向文案）：四受众共用（工行）；
+     * 2）受众级文案（audienceTpls）：每个受众一整套 10 类文案（字节/京东），优先于共用字段。
+     */
     private record InternshipTpl(List<String> audiences, String comb200, String resp200, String res200,
                                  String ov300, String ov300Bank, String ov300State, String ov300BigTech,
                                  String comb500Bank, String comb500BigTech, String comb500State,
-                                 String comb1000Bank, String comb1000BigTech) {
-        String ov300ByAudience(String a) {
-            return switch (a) {
-                case "bank" -> firstOf(ov300Bank, ov300);
-                case "state_owned" -> firstOf(ov300State, ov300);
-                case "big_tech" -> firstOf(ov300BigTech, ov300);
-                default -> ov300;
+                                 String comb1000Bank, String comb1000BigTech,
+                                 String ov300Backend, String ov300Ai, String ov300General,
+                                 String comb500Backend, String comb500Ai, String comb500General,
+                                 String comb1000Backend, String comb1000Ai, String comb1000General,
+                                 Map<String, Aud> audienceTpls) {
+
+        /** 受众级一整套文案：200 档四类 + 300/500/1000 档按岗位方向（后端开发 / AI 应用工程化） */
+        record Aud(String comb200, String resp200, String res200, String techStack,
+                   String ov300Backend, String ov300Ai,
+                   String comb500Backend, String comb500Ai,
+                   String comb1000Backend, String comb1000Ai) {
+        }
+
+        Aud aud(String audience) {
+            return audienceTpls == null ? null : audienceTpls.get(audience);
+        }
+
+        String ov300For(String audience, String direction) {
+            Aud aud = aud(audience);
+            if (aud != null) {
+                return "backend".equals(direction) ? aud.ov300Backend() : aud.ov300Ai();
+            }
+            return switch (direction) {
+                case "backend" -> firstOf(ov300Backend, ov300General);
+                case "ai" -> firstOf(ov300Ai, ov300General);
+                default -> ov300General;
             };
         }
 
-        String comb500ByAudience(String a) {
-            return switch (a) {
-                case "bank" -> firstOf(comb500Bank, comb500BigTech, comb500State);
-                case "big_tech" -> firstOf(comb500BigTech, comb500Bank, comb500State);
-                case "state_owned" -> firstOf(comb500State, comb500Bank, comb500BigTech);
-                default -> firstOf(comb500BigTech, comb500Bank, comb500State);
+        String comb500For(String audience, String direction) {
+            Aud aud = aud(audience);
+            if (aud != null) {
+                return "backend".equals(direction) ? aud.comb500Backend() : aud.comb500Ai();
+            }
+            return switch (direction) {
+                case "backend" -> firstOf(comb500Backend, comb500General);
+                case "ai" -> firstOf(comb500Ai, comb500General);
+                default -> comb500General;
+            };
+        }
+
+        String comb1000For(String audience, String direction) {
+            Aud aud = aud(audience);
+            if (aud != null) {
+                return "backend".equals(direction) ? aud.comb1000Backend() : aud.comb1000Ai();
+            }
+            return switch (direction) {
+                case "backend" -> firstOf(comb1000Backend, comb1000General);
+                case "ai" -> firstOf(comb1000Ai, comb1000General);
+                default -> comb1000General;
             };
         }
 
@@ -1045,149 +1095,724 @@ public class DemoDataInitializer implements CommandLineRunner {
     }
 
     // ---------- 工行（全部受众；大厂版版本保留供手动选择，默认不展示/不自动填充） ----------
+    // 四受众（大厂/国央企/银行/通用）共用同一套文案；300/500/1000 字档按岗位方向区分（后端开发 / AI 应用工程化）。
     private static final String ICBC_COMB200 = """
-            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台研发，围绕持续交付、精准出版、自动投验、生产发布和跨集群迁移等场景，基于 Java、Spring Boot、JPA、Redis 等技术完成后端建模、接口设计、基础设施客户端封装和任务可靠性建设，推动交付流程标准化、自动化与可追溯。""";
+            1、企业级一体化交付平台研发；
+            2、基于 Java、Spring Boot、JPA、Redis 完成任务建模、接口设计和平台能力封装；
+            3、建设持续交付、精准出版、自动投验和环境路由切换流程；
+            4、提升发布投验标准化、可靠性和可追溯性。""";
     private static final String ICBC_RESP200 = """
-            1、参与企业级 DevOps 一体化交付平台后端研发；
-            2、完成项目、集群、构建发布、部署任务及操作审计等领域建模；
-            3、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施能力；
-            4、参与持续交付、自动投验、跨集群迁移和失败恢复链路建设。""";
+            1、企业级一体化交付平台研发，负责后端领域建模、接口设计和任务状态管理；
+            2、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等平台能力；
+            3、持续交付、精准出版、自动投验和环境路由切换流程建设；
+            4、完善步骤日志、异常处理和操作审计能力，提升交付流程规范性。""";
     private static final String ICBC_RES200 = """
-            形成统一的一体化交付入口，通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制，减少多平台切换与人工操作成本，提升发布任务可靠性、可追溯性和生产变更安全性。""";
-    private static final String ICBC_OV300_BANK = """
-            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台研发，面向应用构建、生产发布、精准出版、自动投验、环境路由切换和存量系统跨集群批量迁移等场景，推动交付流程标准化、自动化与可追溯。工作中基于 Java、Spring Boot、JPA、Redis 等技术完成项目、集群、构建发布、部署任务及操作审计等领域建模与接口设计，封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施客户端，并通过异步任务持久化、发布互斥、熔断、失败恢复和审计留痕机制提升发布可靠性。""";
-    private static final String ICBC_OV300_STATE = """
-            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台建设，围绕持续交付、精准出版、自动投验、生产发布、跨集群迁移和任务审计等场景，推进应用交付流程规范化、自动化和可追溯。项目基于 Java、Spring Boot、JPA、Redis、Vue3 等技术实现，工作中参与后端领域建模、RESTful API 设计、基础设施客户端封装、权限控制、统一异常处理和操作审计建设，提升跨系统协同、发布任务恢复和生产变更过程管控能力。""";
-    private static final String ICBC_OV300_GENERAL = """
-            参与企业级 DevOps 一体化交付平台研发，面向应用构建、镜像构建、模板部署、滚动升级、自动投验和跨集群迁移等场景，建设统一交付入口。基于 Java、Spring Boot、JPA、Redis 完成核心领域建模、接口设计和任务状态流转，封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施能力，并通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制提升长任务执行稳定性与系统可维护性。""";
-    private static final String ICBC_COMB500_BANK = """
-            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台研发，面向应用构建、生产发布、精准出版、自动投验、环境路由切换和存量系统跨集群批量迁移等场景，推动交付流程标准化、自动化与可追溯。项目技术栈包括 Java、Spring Boot、JPA、Redis、Vue3、TypeScript、PaaS、Harbor、Apollo、ETCD、HAProxy 等。
-            主要职责包括：
-            1、完成项目、集群、构建发布、部署任务及操作审计等领域建模与 RESTful API 设计；
-            2、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施客户端及鉴权机制；
-            3、参与自动化持续交付链路建设，覆盖 Maven 打包、制品封装、镜像构建、模板创建、滚动升级、应用启停和版本回滚；
-            4、参与精准出版、自动投验和跨集群迁移能力建设。
-            项目通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制，提升发布任务可靠性、生产变更安全性和审计可追溯性。""";
-    private static final String ICBC_COMB1000_BANK = """
-            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台研发。平台面向应用构建、生产发布、精准出版、自动投验、环境路由切换和存量系统跨集群批量迁移等场景，为研发团队提供统一的持续交付入口，推动交付流程标准化、自动化与可追溯。项目技术栈包括 Java、Spring Boot、JPA、Redis、Vue3、TypeScript、Vite、PaaS、Harbor、Apollo、ETCD、HAProxy 等。
-            主要职责包括：
-            1、完成项目、集群、构建发布、部署任务及操作审计等领域建模与 RESTful API 设计，支撑平台核心业务流程运转；
-            2、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施客户端及鉴权机制，屏蔽底层平台差异；
-            3、参与自动化持续交付链路建设，覆盖 Maven 打包、制品封装、镜像构建、模板创建、滚动升级、应用启停和版本回滚；
-            4、参与精准出版、自动投验和跨集群迁移能力建设，支持资源选择、环境参数映射、配置转换、网络预检与健康检查。
-            项目通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制，提升长任务执行稳定性、发布任务可靠性、生产变更安全性和审计可追溯性，减少多平台切换与人工操作成本，推动交付流程标准化、自动化与可追溯。""";
+            1、沉淀覆盖开发构建、模板升级、综测出版、生产导入、健康检查和投验通知的一体化交付入口；
+            2、减少多平台切换、人工改参和投产检查遗漏风险；
+            3、提升发布投验流程的标准化、可靠性、可恢复性和审计可追溯性。""";
+    // 后端开发｜实习描述｜300字以内（四受众共用）
+    private static final String ICBC_OV300_BACKEND = """
+            1、企业级一体化交付平台研发；
+            2、围绕应用构建、模板升级、精准出版、自动投验、环境路由切换和跨集群迁移等场景开展后端开发；
+            3、基于 Java、Spring Boot、JPA、Redis 完成项目、应用、模板、发布任务、出版任务、投验任务和操作审计等领域建模与接口设计；
+            4、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施能力，推动交付流程标准化、自动化和可追溯。""";
+    // AI 应用工程化｜实习描述｜300字以内（四受众共用）
+    private static final String ICBC_OV300_AI = """
+            1、企业级一体化交付平台研发，重点围绕交付流程自动化、任务编排、状态追踪和投验检查能力建设开展工作；
+            2、将 Maven 打包、镜像构建、模板升级、配置迁移、健康检查和投验通知等分散人工操作抽象为标准化流程；
+            3、基于 Spring Boot、JPA、Redis 实现任务状态、步骤日志、异常原因和操作审计管理；
+            4、通过流程编排、日志追踪和检查规则建设，提升平台自动化执行、过程可观测和异常定位能力。""";
+    // 后端开发｜合并型｜500字以内（四受众共用）
+    private static final String ICBC_COMB500_BACKEND = """
+            1、企业级一体化交付平台研发，面向行内应用从开发、综测到生产投验的交付流程，建设持续交付、精准出版、自动投验、环境路由切换和任务审计能力；
+            2、基于 Java、Spring Boot、JPA、Redis 完成项目、应用、模板、集群、发布任务、出版任务、投验任务和步骤日志等领域建模与 RESTful API 设计；
+            3、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施客户端，统一处理登录鉴权、接口调用、参数转换和异常返回；
+            4、持续交付链路建设，支持 Maven 打包、启动文件等组zip包、镜像构建、模板 Tag 更新、滚动升级、Pod/JVM 检查；
+            5、精准出版和自动投验流程建设，支持将综测资源转换为生产出版包，并在生产侧完成资源导入、健康检查和投验通知，提升流程规范性与可追溯性。""";
+    // AI 应用工程化｜合并型｜500字以内（四受众共用）
+    private static final String ICBC_COMB500_AI = """
+            1、企业级一体化交付平台研发，主要围绕交付流程自动化、任务编排、状态追踪和投验检查能力建设开展工作；
+            2、将 Maven 打包、镜像构建、模板 Tag 更新、滚动升级、综测资源出版、生产资源导入、健康检查和投验通知等步骤抽象为可执行的标准化任务链路；
+            3、基于 Java、Spring Boot、JPA、Redis 完成任务模型、步骤日志、操作审计、异常记录和失败恢复等能力建设；
+            4、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等平台接口，统一处理鉴权、参数转换、接口调用和异常返回；
+            5、通过流程编排、状态管理、日志追踪和检查规则，将复杂发布投验过程变成可配置、可追踪、可恢复的平台能力，提升交付效率和异常定位能力。""";
+    // 后端开发｜合并型｜1000字以内（四受众共用）
+    private static final String ICBC_COMB1000_BACKEND = """
+            1、企业级一体化交付平台研发，面向行内应用从开发、综测到生产投验的交付流程，解决多平台切换、人工改参、重复发布、状态难追踪和投产检查依赖人工等问题；
+            2、围绕持续交付、精准出版、自动投验、环境路由切换和任务审计等场景开展后端开发工作，基于 Java、Spring Boot、JPA、Redis 完成项目、应用、模板、集群、发布任务、出版任务、投验任务、步骤日志和操作审计等领域建模；
+            3、设计 RESTful API，统一沉淀任务状态、执行步骤、异常原因和操作留痕，提升发布投验过程的可观测性和可追溯性；
+            4、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施客户端，统一处理登录鉴权、接口调用、参数映射、异常返回和失败重试；
+            5、持续交付链路建设，实现 Maven 打包、Jar/Dockerfile/appstartup.sh 文件组包、构建包上传、镜像构建、模板镜像 Tag 更新、滚动升级、Pod 状态查询和 JVM 日志检查等能力；
+            6、精准出版能力建设，将综测环境应用、模板、镜像、HA、Apollo 配置转换为可确认、可审计、可导入生产的标准出版包；
+            7、自动投验能力建设，在生产侧完成资源导入、Apollo 发布、模板启动、Pod/JVM/ETCD/HA 校验、健康检查和投验平台通知；
+            8、通过异步任务持久化、Redis 发布互斥、步骤日志和失败恢复机制，提升发布投验流程的标准化、可靠性和可恢复性。""";
+    // AI 应用工程化｜合并型｜1000字以内（四受众共用）
+    private static final String ICBC_COMB1000_AI = """
+            1、企业级一体化交付平台研发，工作重点是将分散在 PaaS、Harbor、Apollo、ETCD、HAProxy 和投验平台中的人工操作抽象为可执行、可追踪、可恢复的标准化任务流程；
+            2、围绕持续交付、精准出版、自动投验和环境路由切换等场景开展工程化建设，将复杂发布投验流程拆分为可配置步骤、可观测状态和可恢复任务；
+            3、持续交付侧，将 Maven 打包、Jar/Dockerfile/appstartup.sh 文件组包、镜像构建、模板 Tag 更新、滚动升级、Pod 状态查询和 JVM 日志检查编排为自动化链路；
+            4、精准出版侧，将综测环境应用、模板、镜像、HA、Apollo 配置等资源转换为生产出版包，并按生产规则完成副本、CPU、内存、镜像 Tag、测试 IP 到生产 IP 等参数映射；
+            5、自动投验侧，承接出版包完成生产资源导入、Apollo 发布、模板启动、Pod/JVM/ETCD/HA 校验、健康检查和投验平台通知；
+            6、后端基于 Java、Spring Boot、JPA、Redis 完成任务、步骤日志、操作审计、异常记录、失败恢复等模型与接口设计；
+            7、封装外部平台客户端，统一处理鉴权、接口调用、参数转换和异常返回，提升多平台协同过程中的接入效率和异常定位能力；
+            8、通过任务编排、状态管理、日志追踪和失败恢复机制，提升平台自动化执行能力和发布投验流程的可靠性。""";
     private static final InternshipTpl ICBC_TPL = new InternshipTpl(
             AUDIENCES_ALL,
             ICBC_COMB200, ICBC_RESP200, ICBC_RES200,
-            ICBC_OV300_GENERAL, ICBC_OV300_BANK, ICBC_OV300_STATE, ICBC_OV300_GENERAL,
-            ICBC_COMB500_BANK, null, null,
-            ICBC_COMB1000_BANK, null);
+            null, null, null, null,
+            null, null, null,
+            null, null,
+            ICBC_OV300_BACKEND, ICBC_OV300_AI, null,
+            ICBC_COMB500_BACKEND, ICBC_COMB500_AI, null,
+            ICBC_COMB1000_BACKEND, ICBC_COMB1000_AI, null,
+            null);
 
-    // ---------- 字节（大厂/银行/国央企/通用） ----------
-    private static final String BYTE_COMB200 = """
-            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发，围绕越南区 P2P Transfer、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截和资产安全校验等场景，建设账号侧状态校验、在途交易治理、TCC 配置化规则、Redis 流程状态缓存、MQ 异步补偿和幂等处理能力。""";
-    private static final String BYTE_RESP200 = """
-            1、参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发；
-            2、建设 P2P Transfer 账号侧状态校验和在途交易治理能力；
-            3、参与账户关闭预检查、KYC 引导、账户状态与交易方向匹配规则设计；
-            4、通过 TCC、Redis、MQ 和幂等机制提升账户链路稳定性。""";
-    private static final String BYTE_RES200 = """
-            沉淀统一的账户状态校验、在途交易治理和多场景开户注册能力，支撑 P2P 转账、账户关闭预检查、交易预检查、账户权限校验等多场景复用，提升账号侧链路稳定性、可维护性和异常场景处理一致性。""";
-    private static final String BYTE_OV300_BIGTECH = """
-            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发，围绕越南区 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截及资产安全校验等场景建设账号侧能力。工作中参与设计转账在途交易统一校验能力，聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等未完成订单；同时参与账户状态与交易方向匹配规则、TCC 配置化检查器、Redis 流程状态缓存、MQ 异步补偿和业务幂等处理建设，提升复杂支付账户链路的稳定性。""";
-    private static final String BYTE_OV300_BANK = """
-            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包账户体系后端研发，重点围绕 P2P Transfer 用户间转账、账户状态校验、KYC 引导、账户关闭/注销拦截、资产安全校验和历史交易补偿等金融支付场景开展工作。参与设计账号侧状态校验、在途交易统一校验和账户关闭预检查能力，并通过 TCC 配置化规则、Redis 缓存、MQ 消息通知和幂等处理机制，提升账户状态判断、风险拦截、交易放行和异常场景处理的一致性与可靠性。""";
-    private static final String BYTE_OV300_STATE = """
-            在字节跳动国际支付实习期间，参与钱包用户域账户治理能力建设，围绕 TikTok Pay / PIPO Wallet 的 P2P 转账、开户注册、账户状态治理、KYC 引导、账户关闭预检查和资产安全校验等场景，梳理多入口、多状态、多系统依赖下的账号侧判断逻辑。通过配置化规则、统一校验能力、消息通知和幂等处理机制，减少重复开发和异常处理不一致问题，提升账户操作链路的规范性、稳定性和可维护性。""";
-    private static final String BYTE_COMB500_BIGTECH = """
-            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发，面向越南区 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截及资产安全校验等场景建设账号侧能力，技术栈包括 Go、Kitex、Thrift IDL、Redis、MySQL、TCC、MQ、RPC。
-            主要职责包括：
-            1、参与 P2P Transfer 账号侧状态校验能力建设，梳理付款方/收款方在未开通、KYC 中间态、WalletUid 冻结、资金账户异常、转账过期等分支下的状态路由；
-            2、设计并实现转账在途交易统一校验能力，聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等未完成订单；
-            3、参与账户状态与交易方向匹配规则设计，按出金/入金方向判断账户可操作性；
-            4、参与 BNPL / TTS 多场景开户注册流程编排，结合 Redis 流程状态缓存、MQ 异步补偿和 KYC 回调乱序处理提升流程恢复能力。
-            通过上述工作，沉淀了账户状态校验、交易治理和多场景开户注册能力，提升账号侧链路稳定性和异常处理一致性。""";
-    private static final String BYTE_COMB500_BANK = """
-            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包账户体系后端研发，围绕 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截、资产安全校验和历史交易补偿等场景开展工作，技术栈包括 Go、Kitex、Thrift IDL、Redis、MySQL、TCC、MQ、RPC。
-            主要职责包括：
-            1、参与设计账号侧状态校验能力，覆盖未开通、KYC 中间态、WalletUid 冻结、资金账户异常、转账过期等分支；
-            2、建设转账在途交易统一校验能力，识别待收款、处理中、退款中等未完成订单，并接入账户关闭预检查；
-            3、参与账户状态与交易方向匹配规则设计，区分出金和入金方向下的可操作性；
-            4、通过 TCC 配置化规则、Redis 缓存、MQ 通知和业务幂等机制，提升风险拦截、交易放行和异常处理的一致性。
-            项目沉淀了账户状态校验、交易预检查、账户权限校验等多场景复用能力，提升支付账户链路稳定性、资金安全和可维护性。""";
-    private static final String BYTE_COMB1000_BANK = """
-            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包账户体系后端研发，围绕越南区 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截、资产安全校验和历史交易补偿等金融支付场景开展工作，技术栈包括 Go、Kitex、Thrift IDL、Redis、MySQL、TCC、MQ、RPC。
-            主要职责包括：
-            1、参与设计账号侧状态校验能力，覆盖未开通、KYC 中间态、WalletUid 冻结、资金账户异常、转账过期等分支，保障账户操作风险可控；
-            2、建设转账在途交易统一校验能力，聚合交易系统与钱包产品数据源，识别待收款、处理中、退款中等未完成订单，并接入账户关闭预检查，命中风险项后返回拦截原因与引导信息；
-            3、参与账户状态与交易方向匹配规则设计，区分出金和入金方向下的账户可操作性，提升账户状态判断与交易放行的一致性；
-            4、参与 BNPL / TTS 多场景开户注册流程编排，通过 TCC 配置化规则、Redis 流程状态缓存、MQ 消息通知和业务幂等机制，提升流程恢复能力与异常场景处理一致性。
-            项目沉淀了账户状态校验、交易预检查、账户权限校验等多场景复用能力，提升支付账户链路稳定性、资金安全性和可维护性，支撑支付账户治理场景持续扩展。""";
-    private static final String BYTE_COMB1000_BIGTECH = """
-            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发，面向越南区 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截及资产安全校验等场景建设账号侧能力，技术栈包括 Go、Kitex、Thrift IDL、Redis、MySQL、TCC、MQ、RPC。
-            主要职责包括：
-            1、参与 P2P Transfer 账号侧状态校验能力建设，梳理付款方/收款方在未开通、KYC 中间态、WalletUid 冻结、资金账户异常、转账过期等分支下的状态路由；
-            2、设计并实现转账在途交易统一校验能力，聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等未完成订单，并接入账户关闭预检查；
-            3、参与账户状态与交易方向匹配规则设计，按出金/入金方向判断账户可操作性；
-            4、参与 BNPL / TTS 多场景开户注册流程编排，采用同步编排 + 异步重试模型，结合 Redis 流程状态缓存、MQ 异步补偿和 KYC 回调乱序处理提升流程恢复能力。
-            通过上述工作，沉淀了账户状态校验、在途交易治理和多场景开户注册能力，支撑 P2P 转账、账户关闭预检查、交易预检查、账户权限校验等多场景复用，提升账号侧链路稳定性、可维护性和异常处理一致性。""";
+    // ---------- 字节（大厂/国央企/银行/通用 四受众各自独立文案） ----------
+    // ---- 大厂版 ----
+    private static final String BYTE_BT_RESP200 = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、参与 P2P 转账、账户开通、KYC 引导、冻结/解冻、关闭/注销拦截等链路建设；
+            3、参与账户状态治理、TCC 规则配置、RPC 封装和单元测试；
+            4、提升账户操作链路稳定性与异常场景处理一致性。""";
+    private static final String BYTE_BT_RES200 = """
+            1、沉淀统一的账户状态校验、操作权限判断和在途交易治理能力；
+            2、支撑 P2P 转账、账户关闭预检查、注销拦截、交易预检查等多场景复用；
+            3、减少重复校验逻辑和硬编码分支，提升账号侧链路稳定性与可维护性。""";
+    private static final String BYTE_BT_COMB200 = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、围绕 P2P 转账、账户开通、KYC 引导、账户关闭/注销拦截等场景建设账号侧能力；
+            3、参与状态治理、TCC 配置、RPC 封装、Redis 缓存和 MQ 通知；
+            4、提升账户链路稳定性和异常处理一致性。""";
+    private static final String BYTE_BT_OV300_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截等链路建设账号侧能力；
+            3、参与越南区 P2P Transfer 账号侧状态治理、资产安全校验、TCC 规则配置、RPC 封装和单元测试；
+            4、提升账户操作链路稳定性与异常场景处理一致性。""";
+    private static final String BYTE_BT_OV300_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕支付账户治理和复杂状态判断开展工程化建设；
+            2、参与将 P2P 转账、账户关闭预检查、KYC 引导、冻结/解冻等场景中的账号侧判断逻辑抽象为可复用能力；
+            3、通过 TCC 配置、RPC 封装、Redis 缓存、MQ 通知和幂等处理，提升多场景账户链路的稳定性；
+            4、配合前端、产品、风控、KYC、交易等团队完成接口联调和上线支持。""";
+    private static final String BYTE_BT_COMB500_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截和站内信通知等链路建设；
+            2、重点参与越南区 P2P Transfer 账号侧能力建设，梳理付款方、收款方在未开通、KYC 中间态、账户冻结、CA 异常、转账过期等状态下的业务分支；
+            3、参与账户状态治理、资产安全校验、TCC 规则配置、RPC 调用封装和错误码处理；
+            4、结合 Redis 缓存、MQ 通知和业务幂等机制，提升高频账户预检查和状态变更链路的稳定性。""";
+    private static final String BYTE_BT_COMB500_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，重点围绕复杂账户状态治理、支付链路拦截和用户引导能力建设；
+            2、将 P2P 转账、账户关闭、注销拦截、KYC 引导、冻结/解冻等业务入口中的重复判断逻辑抽象为账号侧统一校验能力；
+            3、通过 TCC 配置控制不同国家、场景、入口下的检查器、返回文案和跳转路径，支持策略快速调整；
+            4、参与 RPC 调用封装、错误码处理、Redis 缓存、MQ 状态广播和业务幂等处理，降低重复查询和重复消费风险；
+            5、参与核心 Handler 单元测试建设，对外部依赖进行 Mock，覆盖参数异常、状态异常、风控拦截和正常链路等场景。""";
+    private static final String BYTE_BT_COMB1000_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，基于 Go、Kitex、Thrift IDL、RPC、TCC、Redis、MQ 等技术，围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截、站内信通知等场景建设钱包用户域账号侧能力；
+            2、重点参与越南区 P2P Transfer 用户间转账账号侧能力建设，将转账链路拆分为付款方发起、确认付款、收款方进入、点击收款和 24 小时超时退款等关键节点；
+            3、梳理付款方、收款方在未开通、KYC 审核中、KYC 驳回、钱包账户冻结、CA 状态异常、风控限制、转账过期等状态下的业务分支，并通过分层校验逻辑减少硬编码判断；
+            4、参与转账在途交易统一校验、账户关闭预检查、注销拦截和账户权限校验能力建设，统一返回拦截原因、文案 key、按钮类型和跳转链接；
+            5、通过 TCC 配置不同国家、入口和场景下的检查器、拦截优先级和返回结果，提升规则调整效率；
+            6、结合 Redis 短周期缓存、MQ 状态广播、业务唯一键幂等和单元测试建设，提升支付账户链路稳定性、可维护性和异常处理一致性。""";
+    private static final String BYTE_BT_COMB1000_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，工作重点是把多入口、多状态、多系统依赖下的支付账户判断逻辑沉淀为标准化、可配置、可复用的账号侧能力；
+            2、围绕越南区 P2P Transfer、账户开通、KYC 引导、账户冻结/解冻、账户关闭/注销拦截、站内信通知等场景，参与用户账户状态治理和操作权限控制能力建设；
+            3、在 P2P 转账场景中，梳理付款方和收款方在未开通、KYC 审核中、KYC 驳回、钱包账户冻结、CA 状态异常、风控限制、转账过期等状态下的分支逻辑；
+            4、参与将是否在途订单、是否风险账户等状态抽象为分层校验逻辑，避免各业务入口重复编写大量 if else；
+            5、通过 TCC 动态配置不同国家、入口、场景下的检查器、拦截优先级、文案 key 和跳转链接，使账户状态校验能力可在 P2P 转账、账户关闭、注销拦截、交易预检查等场景复用；
+            6、参与 Redis 短周期缓存、MQ 状态广播、业务唯一键幂等、RPC 封装和单元测试建设，提升支付账户链路的稳定性、可维护性和异常处理一致性。""";
+    // ---- 国央企版 ----
+    private static final String BYTE_ST_RESP200 = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、参与账户开通、P2P 转账、KYC 引导、冻结/解冻、关闭/注销拦截等链路建设；
+            3、参与账户状态治理、资产安全校验、TCC 规则配置和 RPC 封装；
+            4、提升账户操作流程规范性与异常处理一致性。""";
+    private static final String BYTE_ST_RES200 = """
+            1、沉淀统一的账户状态校验和交易治理能力；
+            2、支撑 P2P 转账、账户关闭预检查、交易预检查和账户权限校验等多场景复用；
+            3、减少重复开发和异常处理不一致问题，提升账号侧链路稳定性与可维护性。""";
+    private static final String BYTE_ST_COMB200 = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、围绕账户开通、P2P 转账、账户状态校验、KYC 引导、关闭/注销拦截等场景建设账号侧能力；
+            3、参与 TCC 配置、RPC 封装、Redis 缓存、MQ 通知和幂等处理；
+            4、提升账户治理流程稳定性。""";
+    private static final String BYTE_ST_OV300_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截等场景建设账号侧能力；
+            3、参与账户状态治理、资产安全校验、TCC 规则配置和 RPC 封装；
+            4、通过统一校验、消息通知和幂等处理机制，提升多场景账户操作流程的规范性、稳定性和可维护性。""";
+    private static final String BYTE_ST_OV300_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕支付账户治理和复杂状态判断开展工程化建设；
+            2、将 P2P 转账、账户关闭、注销拦截、KYC 引导等场景中的账号侧判断逻辑抽象为统一校验能力；
+            3、通过 TCC 配置、RPC 封装、Redis 缓存、MQ 通知和幂等处理，提升流程稳定性；
+            4、支撑账户操作链路规范化、可配置化和异常处理一致性。""";
+    private static final String BYTE_ST_COMB500_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截等链路建设；
+            2、参与越南区 P2P Transfer 账号侧能力建设，梳理付款方、收款方在未开通、KYC 中间态、账户冻结、资金账户异常、转账过期等状态下的处理规则；
+            3、参与账户状态治理、资产安全校验、TCC 配置化规则、RPC 调用封装和错误码处理；
+            4、通过统一校验逻辑、标准化返回结构、Redis 缓存、MQ 通知和业务幂等机制，减少重复开发和异常处理不一致问题；
+            5、提升账户操作链路的规范性、稳定性和可追溯性。""";
+    private static final String BYTE_ST_COMB500_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，重点围绕账户状态治理、风险拦截和用户引导能力建设；
+            2、将 P2P 转账、账户关闭、注销拦截、KYC 引导、冻结/解冻等多入口判断逻辑沉淀为账号侧统一校验能力；
+            3、通过 TCC 配置化管理不同国家、入口和场景下的检查器、拦截优先级、文案 key 和跳转链接，提升规则调整效率；
+            4、参与 Redis 缓存、MQ 状态广播、RPC 封装、错误码治理和消息幂等处理，减少重复查询和重复消费风险；
+            5、提升支付账户治理流程的规范性、稳定性和可维护性。""";
+    private static final String BYTE_ST_COMB1000_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕账户开通、P2P 转账、账户状态校验、KYC 引导、账户冻结/解冻、关闭/注销拦截、站内信通知等场景建设账号侧能力；
+            2、参与越南区 P2P Transfer 用户间转账账号侧状态治理，梳理付款方、收款方在未开通、KYC 审核中、KYC 驳回、钱包账户冻结、CA 资金账户异常、风控限制、转账过期等状态下的业务处理规则；
+            3、参与账户状态与操作权限校验能力建设，将是否在途订单、是否风险账户等状态拆分为分层校验逻辑，并统一返回状态结果、拦截原因、文案 key 和跳转链接；
+            4、参与账户关闭预检查和注销拦截能力建设，对余额、冻结金额、在途交易、未收款订单等风险项进行校验，避免资金未结清情况下执行高风险账户操作；
+            5、通过 TCC 配置不同国家、入口、场景下的校验项、拦截优先级和返回结果，减少多入口重复开发成本；
+            6、参与 Redis 缓存、MQ 状态通知、业务唯一键幂等和单元测试建设，提升账户治理流程的稳定性、规范性和异常处理一致性。""";
+    private static final String BYTE_ST_COMB1000_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，工作重点是将多入口、多状态、多系统依赖下的账户判断逻辑沉淀为可配置、可复用、可维护的账号侧治理能力；
+            2、围绕 P2P 转账、账户开通、KYC 引导、账户冻结/解冻、账户关闭/注销拦截和站内信通知等场景，参与账户状态治理和操作权限控制能力建设；
+            3、在 P2P 场景中，将付款方发起、确认付款、收款方进入、点击收款和超时退款等节点拆分，并按不同主体判断开户状态、KYC 状态、钱包用户状态、资金账户状态和风控状态；
+            4、通过 TCC 配置不同国家、业务入口、产品场景下启用的校验项、拦截优先级和返回结果，减少多入口重复开发；
+            5、参与在途交易校验、账户关闭预检查、注销拦截等能力建设，对余额、冻结金额、未完成交易、未收款订单等风险项进行校验；
+            6、参与 Redis 缓存、MQ 通知、RPC 封装、错误码处理和业务幂等建设，提升账户治理链路的稳定性、规范性和异常处理一致性。""";
+    // ---- 银行版 ----
+    private static final String BYTE_BK_RESP200 = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、参与 P2P 转账、账户开通、KYC 引导、冻结/解冻、关闭/注销拦截等链路建设；
+            3、参与账户状态治理、资产安全校验和交易预检查；
+            4、通过 TCC、Redis、MQ、RPC 和幂等机制提升支付链路稳定性。""";
+    private static final String BYTE_BK_RES200 = """
+            1、沉淀统一的支付账户状态校验、操作权限判断和在途交易治理能力；
+            2、支撑 P2P 转账、账户关闭预检查、交易预检查和账户权限校验等场景；
+            3、提升账户链路稳定性、资金安全和异常处理一致性。""";
+    private static final String BYTE_BK_COMB200 = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、围绕 P2P 转账、账户状态校验、KYC 引导、关闭/注销拦截和资产安全校验建设账号侧能力；
+            3、通过 TCC、Redis、MQ、RPC 和幂等机制提升支付账户链路稳定性。""";
+    private static final String BYTE_BK_OV300_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截等支付账户链路建设；
+            3、参与账户状态治理、资产安全校验、交易预检查、账户关闭预检查和 TCC 规则配置；
+            4、通过 Redis、MQ、RPC 和幂等机制提升支付账户链路稳定性和风险拦截一致性。""";
+    private static final String BYTE_BK_OV300_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕支付账户治理、资产安全校验和风险拦截开展工程化建设；
+            2、将 P2P 转账、账户关闭、注销拦截、KYC 引导等场景中的账户状态判断抽象为统一校验能力；
+            3、通过 TCC 配置、Redis 缓存、MQ 通知、RPC 封装和幂等处理提升链路稳定性；
+            4、支撑支付账户操作权限判断和异常场景一致处理。""";
+    private static final String BYTE_BK_COMB500_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截等链路建设；
+            2、参与越南区 P2P Transfer 账号侧状态治理，按付款方、收款方和退款场景校验开户状态、KYC 状态、WalletUid 状态、CA 资金账户状态和风控状态；
+            3、参与账户关闭预检查和注销拦截能力建设，对余额、冻结金额、在途交易、未收款订单等风险项进行校验，避免资金未结清情况下执行高风险账户操作；
+            4、通过 TCC 配置、RPC 封装、Redis 缓存、MQ 通知和业务幂等机制，提升账户操作链路稳定性、资金安全和异常处理一致性。""";
+    private static final String BYTE_BK_COMB500_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，重点围绕支付账户状态治理、资产安全校验和风险拦截能力建设；
+            2、在 P2P 转账、账户关闭、注销拦截等场景中，参与统一判断用户开户状态、KYC 状态、钱包用户状态、资金账户状态、风控状态和在途交易状态；
+            3、通过 TCC 配置化规则控制不同国家、入口、场景下的检查器和拦截优先级，提升风险策略调整效率；
+            4、参与 Redis 短周期缓存、MQ 状态广播、RPC 封装和业务幂等处理，降低重复查询和重复消费风险；
+            5、提升支付账户链路稳定性、资金安全校验能力和异常处理一致性。""";
+    private static final String BYTE_BK_COMB1000_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕账户开通、P2P 转账、账户状态校验、KYC 引导、账户冻结/解冻、关闭/注销拦截、站内信通知等金融支付场景建设账号侧能力；
+            2、参与越南区 P2P Transfer 用户间转账账号侧能力建设，梳理付款方、收款方在未开通、KYC 审核中、KYC 驳回、钱包账户冻结、CA 资金账户异常、风控限制、转账过期等状态下的处理规则；
+            3、参与账户状态与交易方向匹配规则设计，按出金/入金方向判断账户正常、止入、止出等状态下的可操作性，避免仅按账户异常状态一刀切拦截；
+            4、参与账户关闭预检查和注销拦截链路建设，校验余额、冻结金额、在途交易、未收款订单等资产风险项，避免资金未结清情况下执行高风险账户操作；
+            5、通过 TCC 配置化管理不同国家、入口和场景下的检查器、拦截优先级、文案 key 和跳转链接，提升风险拦截规则的可维护性；
+            6、结合 Redis 缓存、MQ 状态广播、RPC 封装、错误码处理、业务唯一键幂等和单元测试，提升支付账户链路稳定性、资金安全和异常处理一致性。""";
+    private static final String BYTE_BK_COMB1000_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕支付账户治理、资产安全校验、风险拦截和用户引导等场景开展工程化建设；
+            2、在越南区 P2P Transfer 用户间转账场景中，参与付款方发起、确认付款、收款方进入、点击收款、超时退款等关键节点的账号侧状态判断；
+            3、参与将用户开通状态、KYC 状态、WalletUid 状态、CA 资金账户状态、风控状态和在途交易状态抽象为分层校验能力，统一输出是否允许继续操作、拦截原因、文案 key 和跳转路径；
+            4、参与账户关闭预检查和注销拦截能力建设，对余额、冻结金额、未完成交易、未收款订单等资产风险项进行校验，避免资金未结清情况下继续高风险账户操作；
+            5、通过 TCC 配置化规则支持不同国家、入口、场景下的检查器、拦截优先级和返回结果快速调整；
+            6、结合 Redis 缓存、MQ 通知、RPC 封装、错误码治理、业务幂等和单元测试，提升支付账户治理链路的稳定性、资金安全和异常场景处理一致性。""";
+    // ---- 通用版 ----
+    private static final String BYTE_GE_RESP200 = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、参与账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截等链路建设；
+            3、参与 TCC 配置、RPC 封装、Redis 缓存、MQ 通知和单元测试；
+            4、提升账户链路稳定性。""";
+    private static final String BYTE_GE_RES200 = """
+            1、沉淀账户状态校验、交易治理和账户权限判断能力；
+            2、支撑 P2P 转账、账户关闭预检查、交易预检查、注销拦截等多场景复用；
+            3、减少重复逻辑和异常处理不一致问题，提升账号侧链路稳定性与可维护性。""";
+    private static final String BYTE_GE_COMB200 = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截等链路建设；
+            3、参与 TCC 配置、RPC 封装、Redis 缓存、MQ 通知和单元测试，提升账户链路稳定性。""";
+    private static final String BYTE_GE_OV300_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截、站内信通知等链路建设；
+            3、参与账户状态治理、资产安全校验、TCC 规则配置、RPC 封装、错误码处理和单元测试；
+            4、提升账户操作链路稳定性、可维护性和异常场景处理一致性。""";
+    private static final String BYTE_GE_OV300_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发；
+            2、围绕支付账户治理、多状态判断、用户引导和异常拦截等场景开展工程化建设；
+            3、通过 TCC 配置、RPC 封装、Redis 缓存、MQ 通知和幂等处理沉淀可复用账号侧能力；
+            4、支撑 P2P 转账、账户关闭、注销拦截和账户权限校验等多场景复用。""";
+    private static final String BYTE_GE_COMB500_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截和站内信通知等链路建设；
+            2、参与越南区 P2P Transfer 账号侧能力建设，梳理付款方、收款方在未开通、KYC 中间态、账户冻结、CA 异常、转账过期等场景下的状态路由；
+            3、参与账户关闭预检查、注销拦截、资产安全校验和交易预检查能力建设；
+            4、基于 Go、Kitex、Thrift IDL 完成 RPC 接口接入、TCC 配置读取、错误码处理和业务分层开发；
+            5、结合 Redis、MQ、幂等处理和单元测试提升账户链路稳定性。""";
+    private static final String BYTE_GE_COMB500_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，将多入口、多状态、多系统依赖下的账户判断逻辑抽象为可复用账号侧能力；
+            2、围绕 P2P 转账、账户开通、KYC 引导、冻结/解冻、关闭/注销拦截等场景，参与账户状态治理和操作权限控制；
+            3、通过 TCC 配置不同国家、入口和场景下的检查器、拦截优先级和返回结果；
+            4、参与 RPC 调用封装、Redis 缓存、MQ 状态广播、错误码处理和业务幂等建设；
+            5、提升账户操作链路稳定性、可维护性和异常场景处理一致性。""";
+    private static final String BYTE_GE_COMB1000_BACKEND = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，基于 Go、Kitex、Thrift IDL、Redis、TCC、MQ、RPC 等技术建设钱包用户域账号侧能力；
+            2、围绕账户开通、P2P 转账、账户状态校验、KYC 引导、冻结/解冻、关闭/注销拦截、站内信通知等链路参与需求开发和接口联调；
+            3、参与越南区 P2P Transfer 用户间转账能力建设，将付款方发起、确认付款、收款方进入、点击收款和超时退款等节点拆分，并按不同主体判断账户状态；
+            4、参与账号侧状态治理能力建设，覆盖未开通、KYC 审核中、KYC 驳回、钱包账户冻结、CA 异常、风控限制、转账过期等场景；
+            5、参与账户关闭预检查和注销拦截链路建设，对余额、冻结金额、在途交易、未收款订单等风险项进行校验；
+            6、通过 TCC 配置化规则、Redis 缓存、MQ 状态通知、RPC 封装、错误码处理、业务唯一键幂等和单元测试，提升账户操作链路稳定性、可维护性和异常处理一致性。""";
+    private static final String BYTE_GE_COMB1000_AI = """
+            1、参与TikTok 支付/ PIPO Wallet 国际支付账户体系后端研发，工作内容覆盖账户开通、P2P 转账、账户状态校验、KYC 引导、账户冻结/解冻、关闭/注销拦截、站内信通知等链路；
+            2、参与越南区 P2P Transfer 账号侧能力建设，将转账链路拆分为付款方发起、确认付款、收款方进入、点击收款和超时退款等关键节点；
+            3、参与账户状态治理和操作权限控制能力建设，按不同主体和业务节点判断开户状态、KYC 状态、WalletUid 状态、CA 状态、风控状态和在途交易状态；
+            4、通过 TCC 配置不同国家、入口、场景下的检查器、拦截优先级、文案 key 和跳转链接，减少重复开发；
+            5、参与 RPC 封装、错误码处理、Redis 缓存、MQ 状态通知、业务幂等和单元测试建设；
+            6、通过上述工作，将复杂账户状态判断和异常拦截能力沉淀为可复用后端能力，支撑 P2P 转账、账户关闭预检查、交易预检查和账户权限校验等多场景复用。""";
+    /** 字节技术栈：四受众一致 */
+    private static final String BYTE_TECH_STACK = "Go / Kitex / Thrift IDL / Redis / MySQL / TCC / MQ / RPC";
     private static final InternshipTpl BYTE_TPL = new InternshipTpl(
-            List.of("big_tech", "bank", "state_owned", "general"),
-            BYTE_COMB200, BYTE_RESP200, BYTE_RES200,
-            null, BYTE_OV300_BANK, BYTE_OV300_STATE, BYTE_OV300_BIGTECH,
-            BYTE_COMB500_BANK, BYTE_COMB500_BIGTECH, null,
-            BYTE_COMB1000_BANK, BYTE_COMB1000_BIGTECH);
+            AUDIENCES_ALL,
+            null, null, null,
+            null, null, null, null,
+            null, null, null,
+            null, null,
+            null, null, null,
+            null, null, null,
+            null, null, null,
+            Map.of(
+                    "big_tech", new InternshipTpl.Aud(BYTE_BT_COMB200, BYTE_BT_RESP200, BYTE_BT_RES200, BYTE_TECH_STACK,
+                            BYTE_BT_OV300_BACKEND, BYTE_BT_OV300_AI, BYTE_BT_COMB500_BACKEND, BYTE_BT_COMB500_AI,
+                            BYTE_BT_COMB1000_BACKEND, BYTE_BT_COMB1000_AI),
+                    "state_owned", new InternshipTpl.Aud(BYTE_ST_COMB200, BYTE_ST_RESP200, BYTE_ST_RES200, BYTE_TECH_STACK,
+                            BYTE_ST_OV300_BACKEND, BYTE_ST_OV300_AI, BYTE_ST_COMB500_BACKEND, BYTE_ST_COMB500_AI,
+                            BYTE_ST_COMB1000_BACKEND, BYTE_ST_COMB1000_AI),
+                    "bank", new InternshipTpl.Aud(BYTE_BK_COMB200, BYTE_BK_RESP200, BYTE_BK_RES200, BYTE_TECH_STACK,
+                            BYTE_BK_OV300_BACKEND, BYTE_BK_OV300_AI, BYTE_BK_COMB500_BACKEND, BYTE_BK_COMB500_AI,
+                            BYTE_BK_COMB1000_BACKEND, BYTE_BK_COMB1000_AI),
+                    "general", new InternshipTpl.Aud(BYTE_GE_COMB200, BYTE_GE_RESP200, BYTE_GE_RES200, BYTE_TECH_STACK,
+                            BYTE_GE_OV300_BACKEND, BYTE_GE_OV300_AI, BYTE_GE_COMB500_BACKEND, BYTE_GE_COMB500_AI,
+                            BYTE_GE_COMB1000_BACKEND, BYTE_GE_COMB1000_AI)));
 
-    // ---------- 京东（大厂/国央企/银行/通用，AI 方向重点） ----------
-    private static final String JD_COMB200 = """
-            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力，参与 gRPC/proto 通信、策略模式、JSON Schema 校验、流式响应、RAG、Agent、熔断降级和 Kubernetes 部署等工作。""";
-    private static final String JD_RESP200 = """
+    // ---------- 京东（大厂/国央企/银行/通用 四受众各自独立文案） ----------
+    // ---- 大厂版 ----
+    private static final String JD_BT_RESP200 = """
+            1、参与机器人相关后端系统开发，负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块；
+            2、参与设备管理、多模态视觉处理、智能对话、RAG 检索和多模型调度链路建设；
+            3、基于 gRPC / proto 统一接口规范；
+            4、通过异步处理、缓存优化、流式返回和链路日志提升系统稳定性。""";
+    private static final String JD_BT_RES200 = """
+            1、支撑智能家居设备管理、多模态视觉处理和智能对话等场景稳定运行；
+            2、通过策略扩展、配置路由、异步处理和流式返回提升多场景接入效率；
+            3、核心接口响应耗时降低 30%+，吞吐量提升 50%，系统可用性达 99.9%。""";
+    private static final String JD_BT_COMB200 = """
+            1、参与机器人相关后端系统开发；
+            2、负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块，覆盖设备管理、多模态视觉处理和智能对话场景；
+            3、基于 gRPC / proto 构建多端通信体系；
+            4、通过异步处理、缓存优化、流式返回和链路日志提升系统稳定性。""";
+    private static final String JD_BT_OV300_BACKEND = """
+            1、参与机器人相关后端系统开发，基于 Java / Spring Boot 和 Go 构建微服务能力；
+            2、负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块开发，覆盖智能家居设备管理、多模态视觉处理与智能对话场景；
+            3、基于 gRPC / proto 构建多端通信体系，统一数据模型与接口规范；
+            4、通过异步处理、缓存优化、流式返回和链路日志优化接口响应与系统稳定性。""";
+    private static final String JD_BT_OV300_AI = """
+            1、参与机器人智能云平台后端研发，围绕 Cloud VLM、Robot AIUI、Cloud IoT 等模块建设 AI 应用工程化能力；
+            2、参与多模态视觉处理、智能对话、RAG 语义检索、Agent 路由和多模型调度等链路开发；
+            3、通过 gRPC / proto、策略模式、规则引擎、流式响应和链路追踪提升 AI 能力接入效率；
+            4、支撑机器人视觉问答、语音交互和智能设备控制等场景稳定运行。""";
+    private static final String JD_BT_COMB500_BACKEND = """
+            1、参与机器人相关后端系统开发，基于 Java / Spring Boot 和 Go 构建 Cloud IoT、Cloud VLM、Robot AIUI 等模块能力；
+            2、参与 IoT 云端管理平台建设，完成设备接入、设备管理、状态查询、数据采集、控制下发和场景联动等能力；
+            3、参与 Cloud VLM 多模态视觉服务建设，通过策略模式、规则引擎和配置中心解耦场景逻辑与模型路由；
+            4、参与 Robot AIUI 智能对话系统建设，支持音频流接入、上下文透传、Agent 路由、RAG 检索和多模型调度；
+            5、基于 gRPC / proto、异步处理、缓存优化、流式返回和链路日志提升接口响应与系统稳定性。""";
+    private static final String JD_BT_COMB500_AI = """
+            1、参与机器人智能云平台后端研发，围绕多模态视觉服务、智能对话系统和 IoT 云服务建设 AI 应用工程化能力；
+            2、将图片输入、文本上下文、场景规则、模型调用和结果返回抽象为统一服务链路，支持药盒检测、中医舌诊、题目识别、通用视觉问答等场景；
+            3、参与音频流接入、对话工作流编排、Agent 路由、RAG 语义检索和多模型调度能力建设；
+            4、基于 gRPC / proto、策略模式、规则引擎、配置中心、异步处理和流式返回提升多场景接入效率；
+            5、参与链路日志、降级熔断和 Kubernetes 容器化部署，提升 AI 应用链路稳定性和可维护性。""";
+    private static final String JD_BT_COMB1000_BACKEND = """
+            1、参与机器人相关后端系统开发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块，建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力；
+            2、IoT服务中参与 IoT 云端管理平台建设，设计“品类-产品-设备”三层数据模型，支持设备注册、绑定解绑、状态查询、批量操作、分页查询和状态快照等能力；
+            3、参与多模态视觉处理服务建设，将图片输入、文本上下文、场景规则、模型调用和结果返回抽象为统一服务链路；
+            4、基于策略模式和规则引擎实现多业务场景解耦与动态扩展，通过配置中心完成模型路由、插件选择和策略执行的动态配置；
+            5、参与云端智能交互网关建设，支持音频流接入、会话上下文管理、ASR、意图识别、LLM / Agent、TTS 等模块协同处理；
+            6、基于 gRPC / proto 设计多端通信规范，通过异步处理、缓存优化、流式返回、链路日志和 Kubernetes 容器化部署提升接口响应、系统稳定性和可维护性。""";
+    private static final String JD_BT_COMB1000_AI = """
+            1、参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块，建设智能设备接入、多模态视觉处理、智能对话、RAG 语义检索、Agent 路由和多模型调度能力；
+            2、参与统一多模态视觉服务建设，将“图片输入 + 文本上下文 + 场景规则 + 模型调用 + 结果返回”抽象为标准化服务链路；
+            3、基于策略模式设计图像处理框架，通过工厂模式按业务 order 路由到对应场景处理逻辑，并结合规则引擎与配置中心实现模型路由、插件选择和策略执行的动态配置；
+            4、完成 gRPC 接口和 proto 协议设计，统一请求 header、图片内容、文本上下文和响应结构，支撑云端与设备端高效通信；
+            5、参与云端智能交互网关建设，接入 ASR、意图识别、LLM、TTS、Agent 和 RAG 等能力，支持音频流接入、上下文透传、全双工交互和多轮对话；
+            6、构建基于 Milvus 的 RAG 语义检索模块，完成 query 向量化、TopK 召回、结果重排和上下文拼接；
+            7、通过异步处理、流式响应、链路日志、降级熔断和 Kubernetes 容器化部署，提升 AI 应用链路稳定性和扩展能力。""";
+    private static final String JD_BT_TECH_STACK = "Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / proto / Elasticsearch / OSS / Go / Gin / Milvus / Docker / Kubernetes / OpenTelemetry / RAG / Agent";
+    // ---- 国央企版 ----
+    private static final String JD_ST_RESP200 = """
+            1、参与机器人相关后端系统开发；
+            2、负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设；
+            3、参与设备管理、多模态视觉处理、智能对话和 RAG 检索链路开发；
+            4、通过接口规范、异步处理、缓存优化和链路日志提升系统稳定性。""";
+    private static final String JD_ST_RES200 = """
+            1、支撑机器人配件、智能设备、多模态视觉处理和智能对话场景稳定运行；
+            2、沉淀统一设备模型、视觉服务链路和智能对话编排能力；
+            3、提升智能系统服务化接入、接口规范化和多模块协同处理能力。""";
+    private static final String JD_ST_COMB200 = """
+            1、参与机器人相关后端系统开发；
+            2、基于 Java / Spring Boot 和 Go 负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块；
+            3、覆盖设备管理、多模态视觉处理和智能对话场景；
+            4、通过 gRPC / proto、异步处理、缓存优化和链路日志提升系统稳定性。""";
+    private static final String JD_ST_OV300_BACKEND = """
+            1、参与机器人相关后端系统开发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块开展平台建设；
+            2、基于 Java / Spring Boot 和 Go 完成设备管理、多模态视觉处理、智能对话等后端能力开发；
+            3、基于 gRPC / proto 统一多端通信规范和数据模型；
+            4、通过异步处理、缓存优化、流式返回和链路日志提升接口稳定性与系统可维护性。""";
+    private static final String JD_ST_OV300_AI = """
+            1、参与机器人智能云平台研发，围绕多模态视觉服务、智能对话系统和 IoT 云服务开展 AI 应用工程化建设；
+            2、参与 Cloud VLM、Robot AIUI 等模块的服务端链路开发和能力接入；
+            3、通过策略模式、规则引擎、gRPC / proto、RAG 检索和多模型路由支撑智能交互场景；
+            4、提升智能系统服务化接入、接口规范化和链路稳定性。""";
+    private static final String JD_ST_COMB500_BACKEND = """
+            1、参与机器人相关后端系统开发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设智能系统平台能力；
+            2、参与 IoT 云端管理平台建设，实现设备接入、设备管理、状态查询、数据采集、语音控制和场景联动能力；
+            3、参与多模态视觉服务建设，通过策略模式、规则引擎和配置中心解耦场景逻辑与模型路由；
+            4、参与智能对话系统建设，支持音频流接入、上下文透传、Agent 路由、RAG 检索和多模型接入；
+            5、通过统一接口规范、异步处理、缓存优化、流式响应和链路日志提升系统稳定性、扩展性和可维护性。""";
+    private static final String JD_ST_COMB500_AI = """
+            1、参与机器人智能云平台研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块开展 AI 应用工程化建设；
+            2、参与多模态视觉服务建设，将图像识别、视觉问答等能力统一接入服务端链路；
+            3、通过策略模式、规则引擎和配置中心实现模型路由、插件选择和场景处理逻辑的配置化管理；
+            4、参与音频流接入、对话工作流编排、Agent 路由、RAG 检索和多模型接入；
+            5、通过 gRPC / proto、异步处理、流式返回、链路日志和容器化部署提升智能系统稳定性和可维护性。""";
+    private static final String JD_ST_COMB1000_BACKEND = """
+            1、参与机器人相关后端系统开发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设智能设备接入、多模态视觉处理和智能对话能力；
+            2、参与 Cloud IoT 云端管理平台建设，设计“品类-产品-设备”三层数据模型，实现设备注册、绑定解绑、状态查询、批量操作、分页查询和状态快照等全生命周期管理能力；
+            3、参与设备通信、鉴权认证、数据订阅和消息推送能力建设，通过 gRPC / JSF 支撑云端服务、设备端和第三方平台稳定交互；
+            4、参与 Cloud VLM 多模态视觉服务建设，通过策略模式、规则引擎和配置中心实现多场景视觉处理能力的解耦和配置化扩展；
+            5、参与 Robot AIUI 智能对话系统建设，支持音频流接入、上下文透传、Agent 路由、RAG 检索、多模型接入和流式返回；
+            6、通过统一通信规范、数据模型标准化、异步处理、缓存优化、链路日志和容器化部署，提升智能系统平台的稳定性、可维护性和工程化落地能力。""";
+    private static final String JD_ST_COMB1000_AI = """
+            1、参与机器人智能云平台研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块，建设智能设备接入、多模态视觉处理、智能对话、语义检索和多模型调度能力；
+            2、参与统一视觉服务层建设，将图像识别、视觉问答等能力以服务化方式接入，支持药盒检测、中医舌诊、题目识别、通用视觉问答等场景；
+            3、通过策略模式、规则引擎和配置中心将场景逻辑与模型路由解耦，支持多场景配置化扩展；
+            4、参与云端智能交互网关建设，统一接入 ASR、意图识别、LLM、TTS、Agent、RAG 等能力；
+            5、参与 Agent 路由、RAG 语义检索、多模型接入、降级熔断和流式响应能力建设，支撑知识问答、多轮对话和全双工交互场景；
+            6、通过 gRPC / proto 统一通信规范，结合异步处理、缓存优化、链路追踪和 Kubernetes 容器化部署，提升智能系统工程化落地、稳定运行和持续扩展能力。""";
+    private static final String JD_ST_TECH_STACK = "Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / proto / JSF / JMQ / Elasticsearch / OSS / Go / Gin / Milvus / Docker / Kubernetes / OpenTelemetry";
+    // ---- 银行版 ----
+    private static final String JD_BK_RESP200 = """
+            1、参与机器人相关后端系统开发；
+            2、负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块，覆盖设备管理、多模态视觉处理和智能对话场景；
+            3、参与 gRPC / proto 通信规范、异步处理、缓存优化和流式返回建设；
+            4、提升接口稳定性与系统可维护性。""";
+    private static final String JD_BK_RES200 = """
+            1、支撑设备管理、多模态视觉处理和智能对话等场景稳定运行；
+            2、沉淀统一数据模型、接口规范、视觉服务链路和对话编排能力；
+            3、核心接口响应耗时降低 30%+，吞吐量提升 50%，系统可用性达 99.9%。""";
+    private static final String JD_BK_COMB200 = """
+            1、参与机器人相关后端系统开发；
+            2、负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设；
+            3、覆盖设备管理、多模态视觉处理、智能对话和 RAG 检索场景；
+            4、通过 gRPC / proto、异步处理、缓存优化和链路日志提升系统稳定性。""";
+    private static final String JD_BK_OV300_BACKEND = """
+            1、参与机器人相关后端系统开发，基于 Java / Spring Boot 和 Go 构建微服务能力；
+            2、负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块开发，覆盖设备管理、多模态视觉处理和智能对话场景；
+            3、基于 gRPC / proto 统一数据模型和接口规范；
+            4、通过异步处理、缓存优化、流式返回、链路日志和容器化部署提升系统稳定性。""";
+    private static final String JD_BK_OV300_AI = """
+            1、参与机器人智能云平台后端研发，围绕 AI 能力接入、智能对话和多模态视觉处理开展工程化建设；
+            2、参与 Cloud VLM、Robot AIUI 等模块开发，支持视觉问答、RAG 检索、Agent 路由和多模型调度；
+            3、通过 gRPC / proto、策略模式、规则引擎、流式响应和链路日志提升 AI 服务稳定性；
+            4、支撑智能交互场景持续扩展。""";
+    private static final String JD_BK_COMB500_BACKEND = """
+            1、参与机器人相关后端系统开发，基于 Java / Spring Boot 和 Go 负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块能力建设；
+            2、参与设备接入、设备管理、状态查询、数据采集、语音控制和场景联动等后端链路开发；
+            3、参与多模态视觉服务建设，通过策略模式、规则引擎和配置中心实现模型路由和插件选择；
+            4、参与智能对话系统建设，支持音频流接入、上下文透传、RAG 检索、Agent 路由和多模型接入；
+            5、通过 gRPC / proto、异步处理、缓存优化、流式响应和链路日志提升接口稳定性和系统可维护性。""";
+    private static final String JD_BK_COMB500_AI = """
+            1、参与机器人智能云平台后端研发，围绕多模态视觉服务、智能对话系统和 IoT 云服务建设 AI 应用工程化能力；
+            2、参与 Cloud VLM 视觉语言模型服务建设，将图像识别、视觉问答等能力封装为统一服务链路；
+            3、参与 Robot AIUI 智能对话系统建设，支持音频流接入、上下文透传、Agent 路由、RAG 检索和多模型调度；
+            4、通过 gRPC / proto、策略模式、规则引擎、配置中心、异步处理和流式返回提升接口稳定性；
+            5、该经历可作为金融科技智能客服、智能运营、智能风控辅助等 AI 工程化场景的后端系统能力补充。""";
+    private static final String JD_BK_COMB1000_BACKEND = """
+            1、参与机器人相关后端系统开发，基于 Java / Spring Boot 和 Go 构建 Cloud IoT、Cloud VLM、Robot AIUI 等模块能力；
+            2、IoT服务中参与设备接入、设备管理、状态查询、数据采集、控制下发和场景联动等后端链路开发，设计“品类-产品-设备”三层数据模型，提升多类型设备管理的一致性；
+            3、参与多模态视觉服务建设，将图像识别、视觉问答等能力以统一服务形式接入，支持药盒检测、中医舌诊、题目识别和通用视觉问答等场景；
+            4、参与智能对话系统建设，支持音频流接入、上下文透传、Agent 路由、RAG 检索、多模型接入和流式返回；
+            5、基于 gRPC / proto 构建多端通信体系，统一请求字段、上下文字段和响应结构，提升云端、设备端和第三方服务之间的调用稳定性；
+            6、通过异步处理、缓存优化、流式返回、链路日志、降级熔断和 Kubernetes 容器化部署提升系统可用性和问题定位效率。""";
+    private static final String JD_BK_COMB1000_AI = """
+            1、参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设多模态视觉处理、智能对话、语义检索和多模型调度能力；
+            2、参与统一视觉服务层建设，将图片输入、文本上下文、场景规则、模型调用和结果返回抽象为标准化服务链路，支持多类视觉处理场景；
+            3、参与云端智能交互网关建设，统一接入 ASR、意图识别、LLM、TTS、Agent 和 RAG 等能力；
+            4、参与 gRPC / proto 通信规范设计，完成元数据提取、上下文透传和跨模块调用规范建设，保障对话链路数据一致性和可追踪性；
+            5、参与基于 Milvus 的 RAG 语义检索模块建设，完成 query 向量化、TopK 召回、结果重排和上下文拼接，支撑知识问答和多轮对话；
+            6、通过异步处理、流式响应、链路日志、降级熔断和 Kubernetes 容器化部署提升智能系统稳定性。该经历可迁移到金融科技场景中的智能客服、智能运营、智能助手和知识检索系统建设。""";
+    private static final String JD_BK_TECH_STACK = "Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / proto / Elasticsearch / OSS / Go / Gin / Milvus / Docker / Kubernetes / RAG / Agent";
+    // ---- 通用版 ----
+    private static final String JD_GE_RESP200 = """
+            1、参与机器人相关后端系统开发；
+            2、负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块；
+            3、参与设备管理、多模态视觉处理、智能对话、RAG 检索和多模型调度链路建设；
+            4、通过 gRPC / proto、异步处理、缓存优化和流式返回提升系统稳定性。""";
+    private static final String JD_GE_RES200 = """
+            1、支撑智能家居设备管理、多模态视觉处理和智能对话等场景稳定运行；
+            2、沉淀统一设备模型、视觉服务链路、对话工作流和 RAG 检索能力；
+            3、核心接口响应耗时降低 30%+，吞吐量提升 50%，系统可用性达 99.9%。""";
+    private static final String JD_GE_COMB200 = """
+            1、参与机器人相关后端系统开发；
+            2、负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块，覆盖设备管理、多模态视觉处理和智能对话场景；
+            3、基于 gRPC / proto 构建多端通信体系；
+            4、通过异步处理、缓存优化、流式返回和链路日志提升系统稳定性。""";
+    private static final String JD_GE_OV300_BACKEND = """
+            1、参与机器人相关后端系统开发；
+            2、基于 Java / Spring Boot 和 Go 负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块开发；
+            3、覆盖智能家居设备管理、多模态视觉处理、智能对话、RAG 检索和多模型调度等场景；
+            4、基于 gRPC / proto 构建多端通信体系，通过异步处理、缓存优化、流式返回和链路日志提升系统稳定性。""";
+    private static final String JD_GE_OV300_AI = """
             1、参与机器人智能云平台后端研发；
-            2、参与 Cloud IoT 设备管理、数据订阅和消息推送能力建设；
-            3、参与 Cloud VLM 多模态视觉处理服务和 gRPC/proto 协议设计；
-            4、参与 Robot AIUI 对话工作流、RAG、Agent、多模型路由和容器化部署。""";
-    private static final String JD_RES200 = """
-            支撑机器人配件与智能设备生态的云端服务化接入，支持多类视觉处理和智能对话场景；通过异步处理、流式响应和链路优化，提升接口响应与系统吞吐能力，核心接口响应耗时降低 30%+，吞吐量提升 50%。""";
-    private static final String JD_OV300_BIGTECH_AI = """
-            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力。工作中参与 Cloud VLM 视觉语言模型服务建设，基于策略模式设计图像处理框架，结合规则引擎和配置中心实现模型与插件动态路由；同时参与 Robot AIUI 智能对话系统建设，基于 Go、Gin、gRPC 支持音频流接入、上下文透传、RAG 语义检索、Agent 插件化管理、多模型路由、降级熔断和 Kubernetes 容器化部署。""";
-    private static final String JD_OV300_BIGTECH_BACKEND = """
-            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，基于 Java / Spring Boot 和 Go 构建 Cloud IoT、Cloud VLM、Robot AIUI 等模块能力。工作中参与设备全生命周期管理、gRPC/proto 多端通信、JSON Schema 校验、多级重试、异步处理、流式响应、链路追踪和 Kubernetes 容器化部署；同时围绕视觉推理链路和智能对话链路进行性能优化，支撑云端、设备端及第三方服务之间的稳定交互。""";
-    private static final String JD_OV300_STATE = """
-            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕物联网设备管理、多模态视觉处理和智能对话系统建设开展工作。项目覆盖 Cloud IoT、Cloud VLM、Robot AIUI 等模块，涉及设备接入、数据标准化、gRPC 通信、视觉语言模型服务、RAG 语义检索、Agent 插件化管理和多模型调度等能力。工作中注重接口规范、模块解耦、链路稳定性和系统工程化落地，支撑智能设备生态的云端服务化接入。""";
-    private static final String JD_COMB500_BIGTECH_AI = """
-            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力，技术栈包括 Java、Spring Boot、MyBatis-Plus、MySQL、Redis、gRPC、Elasticsearch、OSS、Go、Gin、Milvus、Docker、Kubernetes。
-            主要职责包括：
-            1、参与 Cloud IoT 物联网云服务建设，设计“品类-产品-设备”三层数据模型，实现设备 CRUD、绑定解绑、状态查询、批量操作和状态快照等能力；
-            2、参与 Cloud VLM 视觉语言模型服务建设，基于策略模式设计图像处理框架，结合规则引擎和配置中心实现模型与插件动态路由；
-            3、完成 gRPC 接口和 proto 协议设计，支撑云端、设备端高效通信；
-            4、参与 Robot AIUI 智能对话系统建设，支持音频流接入、状态管理、上下文透传、RAG 语义检索、Agent 插件化管理、多模型路由、降级熔断和链路追踪。
-            项目支撑多类视觉处理和智能对话场景，核心接口响应耗时降低 30%+，吞吐量提升 50%。""";
-    private static final String JD_COMB500_STATE = """
-            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力，支撑机器人配件与智能设备生态的云端服务化接入。
-            主要职责包括：
-            1、参与 Cloud IoT 物联网云服务建设，设计“品类-产品-设备”三层数据模型，实现设备全生命周期管理，并接入设备通信、鉴权认证、数据订阅和消息推送链路；
-            2、参与物模型与 Schema 规范设计，实现设备属性、事件、方法的数据标准化；
-            3、参与 Cloud VLM 视觉语言模型服务建设，基于策略模式、规则引擎和配置中心实现多场景视觉处理能力；
-            4、参与 Robot AIUI 智能对话系统建设，完成流式接口、上下文透传、RAG 语义检索、Agent 管理、多模型路由和 Kubernetes 容器化部署。
-            项目提升了智能系统服务化接入、接口规范化和多模块协同处理能力，支撑智能交互场景持续扩展。""";
-    private static final String JD_COMB1000_BIGTECH_AI = """
-            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力，支撑机器人配件与智能设备生态的云端服务化接入，技术栈包括 Java、Spring Boot、MyBatis-Plus、MySQL、Redis、gRPC、Elasticsearch、OSS、Go、Gin、Milvus、Docker、Kubernetes。
-            主要职责包括：
-            1、参与 Cloud IoT 物联网云服务建设，设计“品类-产品-设备”三层数据模型，实现设备全生命周期管理、绑定解绑、状态查询、批量操作和状态快照，并接入设备通信、鉴权认证、数据订阅和消息推送链路；
-            2、参与物模型与 JSON Schema 规范设计，实现设备属性、事件、方法的数据标准化与多级重试；
-            3、参与 Cloud VLM 视觉语言模型服务建设，基于策略模式设计图像处理框架，结合规则引擎和配置中心实现模型与插件动态路由，支持图像识别、视觉问答等多场景落地；
-            4、完成 gRPC 接口和 proto 协议设计，支撑云端、设备端高效通信；
-            5、参与 Robot AIUI 智能对话系统建设，支持音频流接入、状态管理、上下文透传、RAG 语义检索、Agent 插件化管理、多模型路由、降级熔断和链路追踪。
-            项目支撑多类视觉处理和智能对话场景稳定运行，通过异步处理、流式响应和链路优化，核心接口响应耗时降低 30%+，吞吐量提升 50%。""";
+            2、围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备管理、多模态视觉处理、智能对话和 RAG 检索能力；
+            3、参与 ASR、LLM、TTS、Agent、多模型路由和流式响应等能力接入；
+            4、通过 gRPC / proto、策略模式、规则引擎和链路日志提升 AI 应用工程化落地能力。""";
+    private static final String JD_GE_COMB500_BACKEND = """
+            1、参与机器人相关后端系统开发，基于 Java / Spring Boot 和 Go 构建 Cloud IoT、Cloud VLM、Robot AIUI 等模块能力；
+            2、IoT服务中参与设备接入、设备管理、状态查询、数据采集、语音控制和场景联动能力建设；
+            3、参与多模态视觉服务建设，通过策略模式、规则引擎和配置中心支持多业务场景动态扩展；
+            4、参与音频流接入、对话工作流、Agent 路由、RAG 检索和多模型接入；
+            5、基于 gRPC / proto、异步处理、缓存优化、流式返回、链路日志和容器化部署提升接口响应与系统稳定性。""";
+    private static final String JD_GE_COMB500_AI = """
+            1、参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设 AI 应用工程化能力；
+            2、参与多模态视觉服务建设，将图像识别、视觉问答等能力抽象为统一服务链路，支持多场景动态扩展；
+            3、参与智能对话系统建设，支持音频流接入、上下文透传、Agent 路由、RAG 检索和多模型接入；
+            4、基于 Milvus 构建语义检索链路，完成 query 向量化、TopK 召回、结果重排和上下文拼接；
+            5、通过 gRPC / proto、异步处理、流式返回、链路追踪和 Kubernetes 部署提升系统稳定性。""";
+    private static final String JD_GE_COMB1000_BACKEND = """
+            1、参与机器人相关后端系统开发，基于 Java / Spring Boot 和 Go 构建微服务能力，负责 Cloud IoT、Cloud VLM、Robot AIUI 等模块开发；
+            2、IoT服务中参与 IoT 云端管理平台建设，提供设备接入、设备管理、状态查询、数据采集、语音控制、场景联动和云云对接能力；
+            3、设计“品类-产品-设备”三层数据模型，实现设备注册、绑定解绑、状态查询、批量操作、分页查询和状态快照等能力；
+            4、参与多模态视觉服务建设，通过策略模式、规则引擎和配置中心解耦场景逻辑与模型路由；
+            5、参与智能对话系统建设，支持音频流接入、上下文透传、Agent 路由、RAG 检索和多模型调度；
+            6、基于 gRPC / proto 构建多端通信体系，统一数据模型和接口规范；
+            7、通过异步处理、缓存优化、流式返回、链路日志、降级熔断和 Kubernetes 容器化部署，提升接口响应、系统稳定性和可维护性。""";
+    private static final String JD_GE_COMB1000_AI = """
+            1、参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块，建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力；
+            2、参与 Cloud VLM 视觉语言模型服务建设，将图像识别、视觉问答等能力统一接入服务端链路，支持药盒检测、中医舌诊、题目识别、通用视觉问答等业务场景；
+            3、基于策略模式设计图像处理框架，结合规则引擎与配置中心实现模型路由、插件选择和策略执行的动态配置；
+            4、参与 Robot AIUI 智能对话系统建设，支持音频流接入、会话上下文管理、ASR、意图识别、LLM / Agent、TTS 等模块协同处理；
+            5、构建基于 Milvus 的 RAG 语义检索模块，完成 query 向量化、TopK 召回、结果重排和上下文拼接；
+            6、参与多模型接入与统一调度，设计模型适配、路由、降级和熔断机制；
+            7、通过 gRPC / proto、异步处理、流式响应、链路追踪和 Kubernetes 容器化部署提升系统稳定性和扩展能力。""";
+    private static final String JD_GE_TECH_STACK = "Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / proto / JSF / JMQ / Elasticsearch / OSS / Go / Gin / Milvus / Docker / Kubernetes / OpenTelemetry / RAG / Agent";
     private static final InternshipTpl JD_TPL = new InternshipTpl(
-            List.of("big_tech", "state_owned", "bank", "general"),
-            JD_COMB200, JD_RESP200, JD_RES200,
-            JD_OV300_BIGTECH_AI, null, JD_OV300_STATE, JD_OV300_BIGTECH_BACKEND,
-            null, JD_COMB500_BIGTECH_AI, JD_COMB500_STATE,
-            null, JD_COMB1000_BIGTECH_AI);
+            AUDIENCES_ALL,
+            null, null, null,
+            null, null, null, null,
+            null, null, null,
+            null, null,
+            null, null, null,
+            null, null, null,
+            null, null, null,
+            Map.of(
+                    "big_tech", new InternshipTpl.Aud(JD_BT_COMB200, JD_BT_RESP200, JD_BT_RES200, JD_BT_TECH_STACK,
+                            JD_BT_OV300_BACKEND, JD_BT_OV300_AI, JD_BT_COMB500_BACKEND, JD_BT_COMB500_AI,
+                            JD_BT_COMB1000_BACKEND, JD_BT_COMB1000_AI),
+                    "state_owned", new InternshipTpl.Aud(JD_ST_COMB200, JD_ST_RESP200, JD_ST_RES200, JD_ST_TECH_STACK,
+                            JD_ST_OV300_BACKEND, JD_ST_OV300_AI, JD_ST_COMB500_BACKEND, JD_ST_COMB500_AI,
+                            JD_ST_COMB1000_BACKEND, JD_ST_COMB1000_AI),
+                    "bank", new InternshipTpl.Aud(JD_BK_COMB200, JD_BK_RESP200, JD_BK_RES200, JD_BK_TECH_STACK,
+                            JD_BK_OV300_BACKEND, JD_BK_OV300_AI, JD_BK_COMB500_BACKEND, JD_BK_COMB500_AI,
+                            JD_BK_COMB1000_BACKEND, JD_BK_COMB1000_AI),
+                    "general", new InternshipTpl.Aud(JD_GE_COMB200, JD_GE_RESP200, JD_GE_RES200, JD_GE_TECH_STACK,
+                            JD_GE_OV300_BACKEND, JD_GE_OV300_AI, JD_GE_COMB500_BACKEND, JD_GE_COMB500_AI,
+                            JD_GE_COMB1000_BACKEND, JD_GE_COMB1000_AI)));
 
     private static final Map<String, InternshipTpl> INTERN_TPL = Map.of(
             "中国工商银行北京市分行", ICBC_TPL,
             "字节跳动", BYTE_TPL,
             "京东集团-京东科技", JD_TPL);
+
+    // ==================== 项目内容模板（通用受众；描述/职责/成果/技术栈 + 合并型四档） ====================
+    // key = 项目实体名称；命中时使用模板全文生成内容版本，四受众共用。
+    private record ProjectTpl(String ov300, String resp500, String res200, String techStack,
+                              String comb200, String comb300, String comb500, String comb1000) {
+    }
+
+    // ---------- 项目 1：研发提效一体化交付平台 ----------
+    private static final ProjectTpl PROJ_TPL_DEVOPS = new ProjectTpl(
+            """
+            面向应用构建、跨集群迁移及生产发布场景，独立设计并研发集持续交付、精准出版、自动投验、环境路由切换和任务审计于一体的交付平台。平台围绕 Maven 打包、构建包上传、镜像构建、模板升级、综测出版、生产导入、健康检查和投验通知等流程，减少人工改参、跨平台切换和投产检查遗漏风险，提升交付流程标准化、自动化和可追溯性。""",
+            """
+            1、完成项目、应用、模板、集群、发布任务、出版任务、投验任务、步骤日志和操作审计等领域建模与 RESTful API 设计；
+            2、设计持续交付链路，自动完成 Maven 打包、构建包上传、镜像构建、模板镜像 Tag 更新、滚动升级、Pod 状态查询和 JVM 日志检查；
+            3、实现精准出版能力，以综测环境应用/模板为入口，拉取 PaaS 模板、镜像、HA、Apollo 配置，按生产规则预填副本、CPU、内存和镜像 Tag，并完成测试 IP、数据库、Apollo、ETCD、HA 等环境参数映射；
+            4、实现自动投验能力，承接出版包完成生产资源导入、Apollo 发布、镜像/模板更新、模板启动、Pod/JVM/ETCD 校验、HA 部署、健康检查和投验平台通知。""",
+            """
+            形成覆盖“开发构建—模板升级—综测出版—生产导入—健康检查—投验通知”的一体化交付入口，减少人工改参、跨平台切换和投产检查遗漏风险，提升发布投验流程的标准化、可靠性和可追溯性。""",
+            "Java / Spring Boot / JPA / Redis / Vue 3 / TypeScript / Vite / PaaS / Harbor / Apollo / ETCD / HAProxy",
+            """
+            面向应用构建、跨集群迁移及生产发布场景，研发一体化交付平台。技术栈为 Java / Spring Boot / JPA / Redis / Vue 3 / TypeScript / Vite / PaaS / Harbor / Apollo / ETCD / HAProxy。负责领域建模、接口设计、持续交付、精准出版、自动投验和任务审计，提升交付流程标准化与可追溯性。""",
+            """
+            项目面向应用构建、跨集群迁移及生产发布场景，研发集持续交付、精准出版、自动投验、环境路由切换和任务审计于一体的交付平台。技术栈为 Java / Spring Boot / JPA / Redis / Vue 3 / TypeScript / Vite / PaaS / Harbor / Apollo / ETCD / HAProxy。主要负责项目、应用、模板、发布任务、出版任务、投验任务等领域建模与接口设计，建设 Maven 打包、镜像构建、模板升级、综测出版、生产导入、健康检查和投验通知链路，提升发布投验流程可靠性。""",
+            """
+            项目面向应用构建、跨集群迁移及生产发布场景，研发集持续交付、精准出版、自动投验、环境路由切换和任务审计于一体的交付平台。技术栈为 Java / Spring Boot / JPA / Redis / Vue 3 / TypeScript / Vite / PaaS / Harbor / Apollo / ETCD / HAProxy。
+
+            主要工作：1、完成项目、应用、模板、集群、发布任务、出版任务、投验任务、步骤日志和操作审计等领域建模与 RESTful API 设计；2、设计持续交付链路，自动完成 Maven 打包、构建包上传、镜像构建、模板镜像 Tag 更新、滚动升级、Pod 状态查询和 JVM 日志检查；3、实现精准出版能力，完成综测资源拉取、生产参数预填和环境参数映射；4、实现自动投验能力，完成生产资源导入、Apollo 发布、模板启动、健康检查和投验通知。项目提升了交付流程的标准化、可靠性和可追溯性。""",
+            """
+            项目面向应用构建、跨集群迁移及生产发布场景，研发集持续交付、精准出版、自动投验、环境路由切换和任务审计于一体的交付平台，解决原流程中人工打包、跨平台切换、重复改参、状态难追踪和投产检查依赖人工的问题。技术栈为 Java / Spring Boot / JPA / Redis / Vue 3 / TypeScript / Vite / PaaS / Harbor / Apollo / ETCD / HAProxy。
+
+            主要工作：1、完成项目、应用、模板、集群、发布任务、出版任务、投验任务、步骤日志和操作审计等领域建模与 RESTful API 设计；2、设计持续交付链路，自动完成 Maven 打包、构建包上传、镜像构建、模板镜像 Tag 更新、滚动升级、Pod 状态查询和 JVM 日志检查；3、实现精准出版能力，以综测环境应用/模板为入口，拉取 PaaS 模板、镜像、HA、Apollo 配置，按生产规则预填副本、CPU、内存和镜像 Tag，并完成测试 IP、数据库、Apollo、ETCD、HA 等环境参数映射，生成可导入生产的标准出版包；4、实现自动投验能力，承接出版包完成生产资源导入、Apollo 发布、镜像/模板更新、模板启动、Pod/JVM/ETCD 校验、HA 部署、健康检查和投验平台通知，失败时支持问题定位、人工处理和二次健康检查。
+
+            项目形成覆盖“开发构建—模板升级—综测出版—生产导入—健康检查—投验通知”的一体化交付入口，减少人工改参、跨平台切换和投产检查遗漏风险。""");
+
+    // ---------- 项目 2：TikTok Pay 账户治理与 P2P Transfer ----------
+    private static final ProjectTpl PROJ_TPL_P2P = new ProjectTpl(
+            """
+            面向越南区 P2P Transfer 用户间转账场景，建设账号侧状态校验、在途交易治理、账户关闭预检查与用户引导能力，解决多入口、多状态、多系统依赖下账户操作判断分散、重复开发和异常场景处理不一致的问题。项目覆盖待收款、处理中、退款中等在途订单，以及账户开通、KYC、账户冻结、资金账户异常、风控拦截等异常场景。""",
+            """
+            1、设计并实现转账在途交易统一校验能力，聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等在途订单，并按国家、商户和交易类型维度过滤，避免跨区域历史交易或非目标业务订单造成误拦截；
+            2、将在途交易检查接入账户关闭预检查和拦截链路，命中风险项后返回拦截原因、文案 key、跳转链接，前端按协议渲染，实现后端校验与前端展示解耦；
+            3、设计账户状态与交易方向匹配规则，针对出金/入金方向判断账户正常、止入、止出状态下的可操作性；
+            4、通过 TCC 动态配置不同国家、入口、场景下的检查器、拦截优先级和返回结果；
+            5、参与账户冻结/解冻、出金记账码白名单、历史交易补偿和账户状态变更通知链路建设，并通过 Redis 缓存、MQ 广播和业务幂等提升稳定性。""",
+            """
+            沉淀统一的账户状态校验与交易治理能力，支撑 P2P 转账、账户关闭预检查、交易预检查、账户权限校验等多场景复用，覆盖未开通、KYC 中间态、账户冻结、资金账户异常、风控拦截、存在未完成交易等异常场景。""",
+            "Go / Kitex / Thrift IDL / Redis / TCC / MQ / RPC",
+            """
+            面向越南区 P2P Transfer 用户间转账场景，建设账号侧状态校验、在途交易治理和账户关闭预检查能力。技术栈为 Go / Kitex / Thrift IDL / Redis / TCC / MQ / RPC。负责在途交易校验、状态方向匹配、TCC 规则配置、Redis 缓存和 MQ 幂等处理，提升账户链路稳定性。""",
+            """
+            项目面向越南区 P2P Transfer 用户间转账场景，建设账号侧状态校验、在途交易治理、账户关闭预检查与用户引导能力。技术栈为 Go / Kitex / Thrift IDL / Redis / TCC / MQ / RPC。主要工作包括：聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等在途订单；将在途交易检查接入账户关闭预检查和拦截链路；设计出金/入金方向下账户正常、止入、止出状态的可操作性规则；通过 TCC 配置、Redis 缓存、MQ 广播和幂等处理提升链路稳定性。""",
+            """
+            项目面向越南区 P2P Transfer 用户间转账场景，建设账号侧状态校验、在途交易治理、账户关闭预检查与用户引导能力，解决多入口、多状态、多系统依赖下账户操作判断分散、重复开发和异常处理不一致的问题。技术栈为 Go / Kitex / Thrift IDL / Redis / TCC / MQ / RPC。
+
+            主要工作：1、设计并实现转账在途交易统一校验能力，聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等在途订单，并按国家、商户和交易类型过滤；2、将在途交易检查接入账户关闭预检查和拦截链路，命中风险项后返回拦截原因、文案 key 和跳转链接；3、设计账户状态与交易方向匹配规则，针对出金/入金方向判断账户正常、止入、止出状态下的可操作性；4、通过 TCC 配置检查器、拦截优先级和返回结果，并结合 Redis 缓存、MQ 广播和业务幂等提升稳定性。""",
+            """
+            项目面向越南区 P2P Transfer 用户间转账场景，建设账号侧状态校验、在途交易治理、账户关闭预检查与用户引导能力，解决多入口、多状态、多系统依赖下账户操作判断分散、重复开发和异常场景处理不一致的问题。技术栈为 Go / Kitex / Thrift IDL / Redis / TCC / MQ / RPC。
+
+            主要工作：1、设计并实现转账在途交易统一校验能力，聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等在途订单，并按国家、商户和交易类型维度过滤，避免跨区域历史交易或非目标业务订单造成误拦截；2、将在途交易检查接入账户关闭预检查和拦截链路，命中风险项后返回拦截原因、文案 key、跳转链接，前端按协议渲染，实现后端校验与前端展示解耦；3、设计账户状态与交易方向匹配规则，针对出金/入金方向判断账户正常、止入、止出状态下的可操作性，付款时重点校验出金能力，收款时重点校验入金能力，避免仅按账户异常状态一刀切拦截；4、通过 TCC 动态配置不同国家、入口、场景下的检查器、拦截优先级和返回结果，减少多场景下重复开发成本，并支持策略快速调整与灰度发布；5、参与账户冻结/解冻、出金记账码白名单、历史交易补偿和账户状态变更通知链路建设；对高频账户预检查场景引入短周期 Redis 缓存，降低重复查询压力；账户状态变更事件通过 MQ 广播，消费侧结合业务唯一键进行幂等处理，避免重复消费和状态回退。
+
+            项目沉淀统一的账户状态校验与交易治理能力，支撑 P2P 转账、账户关闭预检查、交易预检查、账户权限校验等多场景复用。""");
+
+    // ---------- 项目 3：钱包用户域多场景开户（BNPL / TTS） ----------
+    private static final ProjectTpl PROJ_TPL_BNPL = new ProjectTpl(
+            """
+            面向 BNPL 先买后付和 TTS 多场景钱包建设统一开户与账户治理框架，将用户注册、KYC、PIN、开户、协议及通知等能力沉淀为可配置流程。项目通过节点编排、TCC 配置、Redis 注册单缓存、MQ 异步补偿和消息幂等机制，降低新增业务场景接入与重复联调成本，提升流程稳定性和用户状态一致性。""",
+            """
+            1、将 BNPL、TTS 等场景抽象为配置化流程，基于节点编排设计容灾策略与执行分离机制，由 TCC 配置控制执行链路；
+            2、采用“同步编排 + 异步重试”模型，核心节点如用户创建、账户开通在主流程中同步执行并支持有限重试，非核心节点如风险通知失败后由 MQ 驱动异步补偿；
+            3、BNPL 场景完成从用户注册到账户开通、PIN 设置、协议签署、风险通知的完整流程；TTS 场景接入多种钱包用户创建与账户治理链路；
+            4、设计注册单缓存与流程状态共享机制，将流程中间态缓存至 Redis，通过请求参数 + Redis 注册信息合并推进请求流程；
+            5、前移身份生成与上下文准备逻辑，并通过下游适配层 / 领域模型层分层隔离风控、KYC、协议中心、用户核心、账户核心等下游依赖。""",
+            """
+            沉淀多场景开户与账户治理能力，降低新增业务场景接入与重复联调成本；通过 Redis 流程状态缓存、节点级重试、MQ 异步补偿、消息幂等和分层适配机制，支持开户注册流程在页面跳转、异步回调或异常中断后继续推进。""",
+            "Go / Kitex / Thrift IDL / Redis / MySQL / TCC / MQ / RPC",
+            """
+            面向 BNPL 先买后付和 TTS 多场景钱包建设统一开户与账户治理框架。技术栈为 Go / Kitex / Thrift IDL / Redis / MySQL / TCC / MQ / RPC。负责配置化流程、同步编排、异步重试、Redis 注册单缓存、消息通知和 KYC 回调处理，提升开户链接稳定性。""",
+            """
+            项目面向 BNPL 先买后付和 TTS 多场景钱包建设统一开户与账户治理框架，将用户注册、KYC、PIN、开户、协议及通知等能力沉淀为可配置流程。技术栈为 Go / Kitex / Thrift IDL / Redis / MySQL / TCC / MQ / RPC。主要工作包括：将 BNPL、TTS 抽象为配置化流程；采用“同步编排 + 异步重试”模型；设计注册单缓存与流程状态共享机制；前移身份生成与上下文准备逻辑；接入 KYC 更新、协议签署、账户开通等消息通知。""",
+            """
+            项目面向 BNPL 先买后付和 TTS 多场景钱包建设统一开户与账户治理框架，将用户注册、KYC、PIN、开户、协议及通知等能力沉淀为可配置流程。技术栈为 Go / Kitex / Thrift IDL / Redis / MySQL / TCC / MQ / RPC。
+
+            主要工作：1、将 BNPL、TTS 等场景抽象为配置化流程，基于节点编排设计容灾策略与执行分离机制，由 TCC 配置控制执行链路；2、采用“同步编排 + 异步重试”模型，核心节点在主流程中同步执行并支持有限重试，非核心节点失败后由 MQ 驱动异步补偿；3、BNPL 完成从用户注册到账户开通、PIN 设置、协议签署、风险通知的完整流程，TTS 接入多种钱包用户创建与账户治理链路；4、设计注册单缓存与流程状态共享机制，将流程中间态缓存至 Redis，通过请求参数 + Redis 注册信息合并推进请求流程；5、接入 KYC 更新、协议签署、账户开通等消息通知，KYC 回调按时间戳排序处理。""",
+            """
+            项目面向 BNPL 先买后付和 TTS 多场景钱包建设统一开户与账户治理框架，将用户注册、KYC、PIN、开户、协议及通知等能力沉淀为可配置流程。技术栈为 Go / Kitex / Thrift IDL / Redis / MySQL / TCC / MQ / RPC。
+
+            主要工作：1、将 BNPL、TTS 等场景抽象为配置化流程，基于节点编排设计容灾策略与执行分离机制，由 TCC 配置控制执行链路；采用“同步编排 + 异步重试”模型，核心节点如用户创建、账户开通在主流程中同步执行并支持有限重试，非核心节点如风险通知失败后由 MQ 驱动异步补偿，避免非核心节点阻塞主链路；2、BNPL 场景完成从用户注册到账户开通、PIN 设置、协议签署、风险通知的完整流程；TTS 场景接入多种钱包用户创建与账户治理链路，支撑多地区多业务场景；3、设计注册单缓存与流程状态共享机制，将流程中间态缓存至 Redis，通过请求参数 + Redis 注册信息合并推进请求流程，支持手机号等关键字段复用与补齐；4、前移身份生成与上下文准备逻辑，如提前补齐用户身份、国家地区等，保证 KYC URL、协议信息、开户参数等下游依赖在决策阶段正确生成；5、通过下游适配层 / 领域模型层分层隔离风控、KYC、协议中心、用户核心、账户核心等下游依赖，并接入用户创建、KYC 更新、协议签署、账户开通等消息通知；KYC 回调消息按时间戳排序，仅处理最新状态，避免乱序导致状态回退。
+
+            项目沉淀多场景开户与账户治理能力，降低新增业务场景接入与重复联调成本。""");
+
+    // ---------- 项目 4：Cloud IoT（物联网云服务） ----------
+    private static final ProjectTpl PROJ_TPL_IOT = new ProjectTpl(
+            """
+            面向机器人配件与智能设备生态，参与建设 IoT 云端管理平台，提供设备接入、设备管理、状态查询、数据采集、语音控制、场景联动和云云对接等能力，解决多类型设备接入后数据模型不统一、设备状态难管理和事件处理链路分散等问题。项目支撑机器人配件与智能设备的接入、管理、控制和监控。""",
+            """
+            1、设计“品类-产品-设备”三层数据模型，实现设备注册、绑定解绑、状态查询、批量操作、分页查询和状态快照等全生命周期管理能力；
+            2、构建设备控制与数据采集接口体系，通过 gRPC / JSF 对接内部服务和第三方云平台，支撑设备状态查询、控制下发、数据订阅和消息推送；
+            3、设计物模型（属性/事件/方法）与 Schema 规范，实现数据标准化；
+            4、参与语音控制链路接入，完成意图结果到设备匹配、控制下发与统一返回码处理；
+            5、基于事件感知机制实现属性变化触发、规则路由与智能消息下行，支撑场景联动与设备告警处理。""",
+            """
+            支持设备管理、控制、监控等核心能力；构建 100ms 级事件响应与智能消息推送能力，沉淀统一设备模型、物模型规范和事件感知链路，提升设备事件处理与消息下行的实时性和可维护性。""",
+            "Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / JSF / JMQ",
+            """
+            面向机器人配件与智能设备生态，参与建设 IoT 云端管理平台。技术栈为 Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / JSF / JMQ。负责三层设备模型、设备控制与采集接口、物模型规范、语音控制链路和事件感知机制建设，支撑设备管理和场景联动。""",
+            """
+            项目面向机器人配件与智能设备生态，参与建设 IoT 云端管理平台，提供设备接入、设备管理、状态查询、数据采集、语音控制、场景联动和云云对接等能力。技术栈为 Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / JSF / JMQ。主要工作包括：设计“品类-产品-设备”三层数据模型；构建设备控制与数据采集接口体系；设计物模型与 Schema 规范；参与语音控制链路接入；基于事件感知机制实现属性变化触发、规则路由与智能消息下行。""",
+            """
+            项目面向机器人配件与智能设备生态，参与建设 IoT 云端管理平台，提供设备接入、设备管理、状态查询、数据采集、语音控制、场景联动和云云对接等能力，解决多类型设备接入后数据模型不统一、设备状态难管理和事件处理链路分散等问题。技术栈为 Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / JSF / JMQ。
+
+            主要工作：1、设计“品类-产品-设备”三层数据模型，实现设备注册、绑定解绑、状态查询、批量操作、分页查询和状态快照等全生命周期管理能力；2、构建设备控制与数据采集接口体系，通过 gRPC / JSF 对接内部服务和第三方云平台，支撑设备状态查询、控制下发、数据订阅和消息推送；3、设计物模型（属性/事件/方法）与 Schema 规范，实现数据标准化；4、参与语音控制链路接入，完成意图结果到设备匹配、控制下发与统一返回码处理；5、基于事件感知机制实现属性变化触发、规则路由与智能消息下行，支撑场景联动与设备告警处理。""",
+            """
+            项目面向机器人配件与智能设备生态，参与建设 IoT 云端管理平台，提供设备接入、设备管理、状态查询、数据采集、语音控制、场景联动和云云对接等能力，解决多类型设备接入后数据模型不统一、设备状态难管理和事件处理链路分散等问题。技术栈为 Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / JSF / JMQ。
+
+            主要工作：1、设计“品类-产品-设备”三层数据模型，实现设备注册、绑定解绑、状态查询、批量操作、分页查询和状态快照等全生命周期管理能力，将设备类别、产品能力和具体设备实例分层管理，提升多类型设备接入的一致性；2、构建设备控制与数据采集接口体系，通过 gRPC / JSF 对接内部服务和第三方云平台，支撑设备状态查询、控制下发、数据订阅和消息推送；3、设计物模型（属性/事件/方法）与 Schema 规范，实现设备属性、事件和方法的数据标准化，降低设备差异带来的适配成本；4、参与语音控制链路接入，完成意图结果到设备匹配、控制下发与统一返回码处理；5、基于事件感知机制实现属性变化触发、规则路由与智能消息下行，支撑场景联动与设备告警处理。
+
+            项目支持设备管理、控制、监控等核心能力，构建 100ms 级事件响应与智能消息推送能力。""");
+
+    // ---------- 项目 5：Cloud VLM（视觉语言模型服务） ----------
+    private static final ProjectTpl PROJ_TPL_VLM = new ProjectTpl(
+            """
+            面向机器人视觉交互场景构建多模态视觉处理服务，支持图像识别、视觉问答等能力，落地药盒检测、中医舌诊、题目识别、通用视觉问答等场景。项目将“图片输入 + 文本上下文 + 场景规则 + 模型调用 + 结果返回”抽象为统一服务链路，提升多场景接入效率和视觉能力服务化扩展能力。""",
+            """
+            1、设计策略模式的图像处理框架，实现多业务场景解耦与动态扩展；
+            2、结合规则引擎与配置中心，实现模型路由、插件选择和策略执行的动态配置；
+            3、完成 gRPC 接口设计和 proto 协议设计，实现多端（云端、设备端）高效通信；
+            4、参与视觉推理服务链路建设，覆盖请求解析、模型调用与结果返回；
+            5、实现 JSON Schema 数据校验与多级重试机制，并从模型推理、网络传输与业务处理三个维度拆解系统时延，定位瓶颈并优化；
+            6、基于异步处理与流式响应优化系统吞吐能力。""",
+            """
+            支持多类视觉处理场景稳定运行，新增场景可通过策略扩展和配置路由接入；通过链路拆解、异步处理、流式返回和校验前置等优化，核心接口响应耗时降低 30%+，吞吐量提升 50%。""",
+            "Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / Elasticsearch / OSS",
+            """
+            面向机器人视觉交互场景构建多模态视觉处理服务，支持图像识别、视觉问答等能力。技术栈为 Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / Elasticsearch / OSS。负责策略模式框架、gRPC/proto、JSON Schema 校验、多级重试、异步处理和流式响应，核心接口耗时降低 30%+。""",
+            """
+            项目面向机器人视觉交互场景构建多模态视觉处理服务，支持图像识别、视觉问答等能力，落地药盒检测、中医舌诊、题目识别、通用视觉问答等场景。技术栈为 Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / Elasticsearch / OSS。主要工作包括：设计策略模式的图像处理框架；结合规则引擎与配置中心实现模型路由、插件选择和策略执行动态配置；完成 gRPC 接口和 proto 协议设计；实现 JSON Schema 校验、多级重试、异步处理和流式响应优化。""",
+            """
+            项目面向机器人视觉交互场景构建多模态视觉处理服务，支持图像识别、视觉问答等能力，落地药盒检测、中医舌诊、题目识别、通用视觉问答等场景。项目将“图片输入 + 文本上下文 + 场景规则 + 模型调用 + 结果返回”抽象为统一服务链路，提升多场景接入效率。技术栈为 Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / Elasticsearch / OSS。
+
+            主要工作：1、设计策略模式的图像处理框架，实现多业务场景解耦与动态扩展；2、结合规则引擎与配置中心，实现模型路由、插件选择和策略执行的动态配置；3、完成 gRPC 接口设计和 proto 协议设计，实现多端高效通信；4、参与视觉推理服务链路建设，覆盖请求解析、模型调用与结果返回；5、实现 JSON Schema 数据校验与多级重试机制，并从模型推理、网络传输与业务处理三个维度拆解系统时延，定位瓶颈并优化；6、基于异步处理与流式响应优化系统吞吐能力。""",
+            """
+            项目面向机器人视觉交互场景构建多模态视觉处理服务，支持图像识别、视觉问答等能力，落地药盒检测、中医舌诊、题目识别、通用视觉问答等场景。项目将“图片输入 + 文本上下文 + 场景规则 + 模型调用 + 结果返回”抽象为统一服务链路，提升多场景接入效率。技术栈为 Java / Spring Boot / MyBatis-Plus / MySQL / Redis / gRPC / Elasticsearch / OSS。
+
+            主要工作：1、设计策略模式的图像处理框架，实现多业务场景解耦与动态扩展，将不同视觉场景抽象为策略接口，并通过工厂模式按业务场景路由到对应处理逻辑；2、结合规则引擎与配置中心，实现模型路由、插件选择和策略执行的动态配置，支持新增场景低成本接入；3、完成 gRPC 接口设计和 proto 协议设计，实现云端、设备端高效通信，并统一请求字段、图片内容、文本上下文和响应结构；4、参与视觉推理服务链路建设，覆盖请求解析、模型调用与结果返回；5、实现 JSON Schema 数据校验与多级重试机制，对格式问题和字段缺失提前拦截，对网络波动和下游短暂异常进行有限重试；6、从模型推理、网络传输与业务处理三个维度拆解系统时延，定位瓶颈并优化；7、基于异步处理与流式响应优化系统吞吐能力。
+
+            项目支持多类视觉处理场景稳定运行，新增场景可通过策略扩展和配置路由接入，核心接口响应耗时降低 30%+，吞吐量提升 50%。""");
+
+    // ---------- 项目 6：Robot AIUI（智能对话系统） ----------
+    private static final ProjectTpl PROJ_TPL_AIUI = new ProjectTpl(
+            """
+            基于 Go 构建面向机器人的智能交互平台，集成语音识别、自然语言理解与大模型能力，支撑多轮对话、全双工交互和多模型能力扩展。项目通过云端接入层、对话工作流、Agent 路由、RAG 语义检索、多模型调度和链路追踪能力，支撑高并发对话请求与多模块协同处理。""",
+            """
+            1、设计云端接入层与对话工作流，接收音频流及 robotId、traceId 等元数据，构建会话上下文并驱动 ASR、意图识别、LLM/Agent、TTS 等模块协同处理；
+            2、设计 gRPC / proto 协议与统一通信规范，完成元数据提取、上下文透传与跨模块调用规范设计，保障对话链路数据一致性和可追踪性；
+            3、参与插件化 Agent 管理与路由体系建设，基于工厂模式支持天气、新闻、健康、知识问答、IoT 控制等领域能力动态扩展；
+            4、构建基于 Milvus 的 RAG 语义检索模块，完成 query 向量化、TopK 召回、结果重排和上下文拼接链路；
+            5、参与多模型接入与统一调度，设计模型适配、路由、降级与熔断机制，并完成链路追踪与 Kubernetes 容器化部署。""",
+            """
+            支撑高并发对话请求与多模块协同处理，系统可用性达 99.9%；完成全双工、Agent 路由、RAG 检索和多模型接入等核心链路建设，支持智能交互场景持续扩展。""",
+            "Go / gRPC / Gin / MySQL / Redis / Milvus / Docker / Kubernetes",
+            """
+            基于 Go 构建面向机器人的智能交互平台，集成语音识别、自然语言理解与大模型能力。技术栈为 Go / gRPC / Gin / MySQL / Redis / Milvus / Docker / Kubernetes。负责云端接入层、对话工作流、gRPC/proto、Agent 路由、RAG 检索、多模型调度、链路追踪和容器化部署。""",
+            """
+            项目基于 Go 构建面向机器人的智能交互平台，集成语音识别、自然语言理解与大模型能力，支撑多轮对话、全双工交互和多模型能力扩展。技术栈为 Go / gRPC / Gin / MySQL / Redis / Milvus / Docker / Kubernetes。主要工作包括：设计云端接入层与对话工作流，驱动 ASR、意图识别、LLM/Agent、TTS 等模块协同处理；设计 gRPC / proto 协议与统一通信规范；参与插件化 Agent 管理与路由体系建设；构建基于 Milvus 的 RAG 语义检索模块；参与多模型接入、降级熔断、链路追踪与容器化部署。""",
+            """
+            项目基于 Go 构建面向机器人的智能交互平台，集成语音识别、自然语言理解与大模型能力，支撑多轮对话、全双工交互和多模型能力扩展。技术栈为 Go / gRPC / Gin / MySQL / Redis / Milvus / Docker / Kubernetes。
+
+            主要工作：1、设计云端接入层与对话工作流，接收音频流及 robotId、traceId 等元数据，构建会话上下文并驱动 ASR、意图识别、LLM/Agent、TTS 等模块协同处理；2、设计 gRPC / proto 协议与统一通信规范，完成元数据提取、上下文透传与跨模块调用规范设计，保障对话链路数据一致性和可追踪性；3、参与插件化 Agent 管理与路由体系建设，基于工厂模式支持天气、新闻、健康、知识问答、IoT 控制等领域能力动态扩展；4、构建基于 Milvus 的 RAG 语义检索模块；5、参与多模型接入与统一调度，设计模型适配、路由、降级与熔断机制，并完成链路追踪与 Kubernetes 容器化部署。""",
+            """
+            项目基于 Go 构建面向机器人的智能交互平台，集成语音识别、自然语言理解与大模型能力，支撑多轮对话、全双工交互和多模型能力扩展。技术栈为 Go / gRPC / Gin / MySQL / Redis / Milvus / Docker / Kubernetes。
+
+            主要工作：1、设计云端接入层与对话工作流，接收音频流及 robotId、traceId 等元数据，构建会话上下文并驱动 ASR、意图识别、LLM/Agent、TTS 等模块协同处理；2、设计 gRPC / proto 协议与统一通信规范，完成元数据提取、上下文透传与跨模块调用规范设计，保障对话链路数据一致性和可追踪性；3、参与插件化 Agent 管理与路由体系建设，基于工厂模式支持天气、新闻、健康、知识问答、IoT 控制等领域能力动态扩展；4、构建基于 Milvus 的 RAG 语义检索模块，完成 query 向量化、TopK 召回、结果重排和上下文拼接链路，支撑知识问答与多轮对话；5、参与多模型接入与统一调度，设计模型适配、路由、降级与熔断机制，并完成链路追踪与 Kubernetes 容器化部署。
+
+            项目支撑高并发对话请求与多模块协同处理，系统可用性达 99.9%；完成全双工、Agent 路由、RAG 检索和多模型接入等核心链路建设，支持智能交互场景持续扩展。""");
+
+    /** 项目内容模板映射：key = 项目实体名称 */
+    private static final Map<String, ProjectTpl> PROJECT_TPL = Map.of(
+            "研发提效：企业级 DevOps 一体化交付平台", PROJ_TPL_DEVOPS,
+            "TikTok Pay 钱包用户域账户治理与 P2P Transfer 能力建设", PROJ_TPL_P2P,
+            "钱包用户域多场景开户与账户治理能力建设（BNPL / TTS）", PROJ_TPL_BNPL,
+            "Cloud IoT（物联网云服务）", PROJ_TPL_IOT,
+            "Cloud VLM（视觉语言模型服务）", PROJ_TPL_VLM,
+            "Robot AIUI（智能对话系统）", PROJ_TPL_AIUI);
 }

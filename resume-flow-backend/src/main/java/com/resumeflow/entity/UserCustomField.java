@@ -36,6 +36,26 @@ public class UserCustomField extends BaseEntity {
     @Column(name = "match_keywords", columnDefinition = "TEXT")
     private String matchKeywords;
 
+    /** 适用模板 id 列表（JSON 数组）；为空表示全部模板适用 */
+    @Column(name = "template_ids", length = 200)
+    private String templateIds;
+
+    /** 字数档位：within_100 / within_200 / within_300 / within_500 / within_1000 / full */
+    @Column(name = "length_type", length = 30)
+    private String lengthType;
+
+    /** 是否参与一键自动填充 */
+    @Column(name = "auto_fill_enabled", nullable = false, columnDefinition = "boolean default true")
+    private Boolean autoFillEnabled = true;
+
+    /** 是否允许插件手动点选填充 */
+    @Column(name = "manual_fill_enabled", nullable = false, columnDefinition = "boolean default true")
+    private Boolean manualFillEnabled = true;
+
+    /** 乐观锁版本号（手动维护）：插件保存时提交，落后于服务端则 409 冲突 */
+    @Column(name = "version", nullable = false, columnDefinition = "bigint default 0")
+    private Long version = 0L;
+
     /** 来源引用，格式 sourceType:sourceId，如 internship:1 / project:3 / material:5，用于选择内容版本与日期 */
     @Column(name = "source_ref", length = 50)
     private String sourceRef;

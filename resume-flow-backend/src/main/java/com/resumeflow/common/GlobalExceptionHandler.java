@@ -26,6 +26,13 @@ public class GlobalExceptionHandler {
         return Result.error(e.getCode(), e.getMessage());
     }
 
+    @ExceptionHandler(ConflictException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public Result<Object> handleConflictException(ConflictException e) {
+        log.warn("数据冲突: {}", e.getMessage());
+        return Result.error(409, e.getMessage(), e.getServerData());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public Result<Void> handleValidException(MethodArgumentNotValidException e) {
         String message = e.getBindingResult().getFieldErrors().stream()

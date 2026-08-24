@@ -12,6 +12,64 @@ export interface ConfirmItem {
   value: string;
 }
 
+export interface SetElementValueResult {
+  success: boolean;
+  reason: string;
+  fieldType: string;
+}
+
+/** 识别元素类型（含常见富文本编辑器） */
+function detectFieldType(el: HTMLElement): string {
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'input') return `input[${(el as HTMLInputElement).type || 'text'}]`;
+  if (tag === 'textarea') return 'textarea';
+  if (tag === 'select') return 'select';
+  if (el.classList.contains('ql-editor')) return 'richtext:quill';
+  if (el.classList.contains('w-e-text') || el.classList.contains('w-e-text-container')) return 'richtext:wangeditor';
+  if (el.classList.contains('ck-content')) return 'richtext:ckeditor';
+  if (el.classList.contains('ProseMirror') || el.classList.contains('tox-edit-area')) return 'richtext:tinymce';
+  if (el.getAttribute('contenteditable') === 'true' || el.getAttribute('contenteditable') === '') return 'contenteditable';
+  return tag;
+}
+
+/** 富文本编辑器容器 → 实际可编辑元素 */
+function resolveRichTarget(el: HTMLElement): HTMLElement {
+  if (el.classList.contains('w-e-text-container') || el.classList.contains('tox-edit-area')) {
+    const inner = el.querySelector<HTMLElement>('[contenteditable="true"], .w-e-text, iframe');
+    if (inner && inner.tagName !== 'IFRAME') return inner;
+  }
+  return el;
+}
+
+/**
+ * 将内容填入指定元素（手动点选填充统一入口）：
+ * input/textarea 走原生 setter（兼容 React/Vue/AntD/Element Plus 受控组件）；
+ * select 按 option 文本/值匹配；contenteditable 与富文本写入可编辑区域；
+ * 填入后派发 keydown/input/change/keyup/blur 事件。
+ */
+export function setElementValue(element: HTMLElement, value: string): SetElementValueResult {
+  const el = resolveRichTarget(element);
+  const fieldType = detectFieldType(el);
+  try {
+    const tag = el.tagName.toLowerCase();
+    let ok = false;
+    if (tag === 'input' || tag === 'textarea') {
+      ok = setNativeValue(el as HTMLInputElement | HTMLTextAreaElement, value);
+    } else if (tag === 'select') {
+      ok = setSelectValue(el as HTMLSelectElement, value);
+      if (!ok) return { success: false, reason: '下拉框中未找到匹配选项', fieldType };
+    } else {
+      ok = setContentEditableValue(el, value);
+    }
+    if (!ok) return { success: false, reason: '写入失败', fieldType };
+    el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+    return { success: true, reason: '', fieldType };
+  } catch (err: any) {
+    return { success: false, reason: String(err?.message || err), fieldType };
+  }
+}
+
 export function applyMatches(response: AutofillMatchResponse): {
   filled: number;
   skipped: number;
@@ -89,6 +147,20 @@ export function fillConfirmItem(item: ConfirmItem): boolean {
   return setFieldValue(el, item.value);
 }
 
+/** 按 fieldId 定位页面元素（供悬浮面板预览确认后逐个填入复用） */
+export function locateFieldElement(fieldId: string): HTMLElement | null {
+  return findElement(fieldId);
+}
+
+/** 读取元素当前文本值（撤回填充前快照用） */
+export function readElementText(el: HTMLElement): string {
+  const target = resolveRichTarget(el);
+  const tag = target.tagName.toLowerCase();
+  if (tag === 'input' || tag === 'textarea') return (target as HTMLInputElement).value || '';
+  if (tag === 'select') return (target as HTMLSelectElement).value || '';
+  return target.innerText || target.textContent || '';
+}
+
 function findElement(fieldId: string): HTMLElement | null {
   let el = document.querySelector(`[data-rf-field-id="${fieldId}"]`);
   if (el) return el as HTMLElement;
@@ -163,7 +235,6 @@ function setSelectValue(el: HTMLSelectElement, value: string): boolean {
     return false;
   }
 }
-
 function setContentEditableValue(el: HTMLElement, value: string): boolean {
   try {
     el.innerText = value;

@@ -65,6 +65,10 @@
           <el-icon><Refresh /></el-icon>
           <span>同步状态</span>
         </el-menu-item>
+        <el-menu-item index="/data-transfer">
+          <el-icon><Download /></el-icon>
+          <span>数据导入导出</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>
@@ -84,7 +88,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useRouter } from 'vue-router';
 import { authApi } from '@/api/auth';
 import {
-  HomeFilled, User, Reading, Briefcase, Files, Star, Document, Collection, List, EditPen, Trophy, Notebook, View, Refresh,
+  HomeFilled, User, Reading, Briefcase, Files, Star, Document, Collection, List, EditPen, Trophy, Notebook, View, Refresh, Download,
 } from '@element-plus/icons-vue';
 
 const authStore = useAuthStore();

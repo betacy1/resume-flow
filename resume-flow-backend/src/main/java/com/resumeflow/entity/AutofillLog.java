@@ -41,6 +41,10 @@ public class AutofillLog extends BaseEntity {
     @Column(name = "client_ip", length = 50)
     private String clientIp;
 
+    /** 填充方式：auto 一键自动填充 / manual 手动点选填充 */
+    @Column(name = "fill_type", length = 20)
+    private String fillType;
+
     @Column(name = "status", length = 20)
     private String status;
 

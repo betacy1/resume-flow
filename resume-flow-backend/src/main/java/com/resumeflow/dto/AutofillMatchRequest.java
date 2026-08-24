@@ -19,6 +19,8 @@ public class AutofillMatchRequest {
     private Long preferredInternshipId;
     private String pageUrl;
     private String pageTitle;
+    /** 填充方式：auto 一键自动填充 / manual 手动点选填充，缺省 auto */
+    private String fillType;
     private List<FieldInfo> fields;
 
     /**

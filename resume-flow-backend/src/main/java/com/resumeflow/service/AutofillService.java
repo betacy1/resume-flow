@@ -51,6 +51,7 @@ public class AutofillService {
                 .stream().filter(s -> Boolean.TRUE.equals(s.getSensitive())).count()));
         logEntity.setDetailJson(serializeDetail(response));
         logEntity.setClientIp(getClientIp(httpRequest));
+        logEntity.setFillType("manual".equals(request.getFillType()) ? "manual" : "auto");
         logEntity.setStatus("SUCCESS");
 
         autofillLogRepository.save(logEntity);

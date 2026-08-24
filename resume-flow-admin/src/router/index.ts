@@ -103,6 +103,12 @@ const router = createRouter({
           component: () => import('@/views/Logs.vue'),
           meta: { title: '填充日志' },
         },
+        {
+          path: 'data-transfer',
+          name: 'DataTransfer',
+          component: () => import('@/views/DataTransfer.vue'),
+          meta: { title: '数据导入导出' },
+        },
       ],
     },
   ],
