@@ -42,7 +42,7 @@ services:
       MYSQL_USERNAME: ${MYSQL_USER:-resumeflow}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-resumeflow123}
     ports:
-      - "8080:8080"
+      - "8081:8081"
     depends_on:
       - mysql
     networks:

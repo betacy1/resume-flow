@@ -21,6 +21,7 @@ import java.util.List;
 public class AnswerMaterialService {
 
     private final AnswerMaterialRepository materialRepository;
+    private final ProfileVersionService versionService;
 
     /**
      * 查询当前用户所有素材
@@ -47,6 +48,7 @@ public class AnswerMaterialService {
         applyDTO(dto, entity);
 
         materialRepository.save(entity);
+        versionService.bump(userId);
         log.info("用户 {} 创建素材: {}", userId, dto.getTitle());
         return entity.getId();
     }
@@ -60,6 +62,7 @@ public class AnswerMaterialService {
         AnswerMaterial entity = getMaterialById(id, userId);
         applyDTO(dto, entity);
         materialRepository.save(entity);
+        versionService.bump(userId);
     }
 
     /**
@@ -71,6 +74,7 @@ public class AnswerMaterialService {
         AnswerMaterial entity = getMaterialById(id, userId);
         entity.setDeleted(true);
         materialRepository.save(entity);
+        versionService.bump(userId);
     }
 
     /**

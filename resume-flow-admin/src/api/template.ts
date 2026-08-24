@@ -13,6 +13,8 @@ export interface ApplicationTemplateDTO {
   careerPlan?: string;
   aiCollaboration?: string;
   skillKeywords?: string;
+  /** 专业技能排序（逗号分隔的 skillKey，决定各模板下技能展示顺序） */
+  skillOrder?: string;
   isDefault?: boolean;
 }
 
@@ -49,6 +51,49 @@ export const templateApi = {
   create: (data: ApplicationTemplateDTO) => request.post<any, number>('/templates', data),
   update: (id: number, data: ApplicationTemplateDTO) => request.put(`/templates/${id}`, data),
   delete: (id: number) => request.delete(`/templates/${id}`),
+  /** 按模板生成完整简历预览（经历范围由配置表决定，必含专业技能模块） */
+  resumePreview: (id: number) => request.get<any, ResumePreviewVO>(`/templates/${id}/resume-preview`),
+};
+
+/** 简历预览载荷 */
+export interface ResumePreviewVO {
+  template: { id: number; name: string; audienceType: string; description: string };
+  basicInfo: Record<string, any> | null;
+  educationList: any[];
+  internships: Array<{ source: Record<string, any>; emphasisTags?: string; displayOrder?: number }>;
+  projects: Array<{ source: Record<string, any>; emphasisTags?: string; displayOrder?: number }>;
+  skills: {
+    ordered: Array<{ skillKey: string; title: string; content: string }>;
+    keywords: string;
+    short: string;
+    full: string;
+  };
+  awards: any[];
+  selfEvaluation: string;
+  careerPlan: string;
+  aiCollaboration: string;
+}
+
+/** 模板-经历关系配置：控制某模板下实习/项目的展示与自动填充策略 */
+export interface TemplateExperienceConfigDTO {
+  id?: number;
+  templateId?: number;
+  sourceType?: string;
+  sourceId?: number;
+  sourceName?: string;
+  includedInResume?: boolean;
+  autoFillEnabled?: boolean;
+  autoFillPriority?: number;
+  manualSelectable?: boolean;
+  emphasisTags?: string;
+  displayOrder?: number;
+}
+
+export const templateConfigApi = {
+  list: (templateId: number) =>
+    request.get<any, TemplateExperienceConfigDTO[]>('/template-configs', { params: { templateId } }),
+  save: (templateId: number, data: TemplateExperienceConfigDTO[]) =>
+    request.put(`/template-configs/${templateId}`, data),
 };
 
 export const materialApi = {

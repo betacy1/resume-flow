@@ -21,6 +21,7 @@ public class UserCustomFieldService {
 
     private final UserCustomFieldRepository userCustomFieldRepository;
     private final ObjectMapper objectMapper;
+    private final ProfileVersionService versionService;
 
     public List<UserCustomFieldDTO> list(String keyword, String category, Boolean enabled, Long templateId) {
         Long userId = SecurityUtils.getCurrentUserId();
@@ -40,6 +41,7 @@ public class UserCustomFieldService {
         entity.setUserId(userId);
         applyDTO(entity, dto);
         userCustomFieldRepository.save(entity);
+        versionService.bump(userId);
         return entity.getId();
     }
 
@@ -49,6 +51,7 @@ public class UserCustomFieldService {
         UserCustomField entity = getById(id, userId);
         applyDTO(entity, dto);
         userCustomFieldRepository.save(entity);
+        versionService.bump(userId);
     }
 
     @Transactional
@@ -57,6 +60,7 @@ public class UserCustomFieldService {
         UserCustomField entity = getById(id, userId);
         entity.setDeleted(true);
         userCustomFieldRepository.save(entity);
+        versionService.bump(userId);
     }
 
     @Transactional
@@ -65,6 +69,7 @@ public class UserCustomFieldService {
         UserCustomField entity = getById(id, userId);
         entity.setEnabled(Boolean.TRUE.equals(enabled));
         userCustomFieldRepository.save(entity);
+        versionService.bump(userId);
     }
 
     public UserCustomField getById(Long id, Long userId) {
@@ -90,6 +95,7 @@ public class UserCustomFieldService {
             keywords.add(trimmed);
             entity.setMatchKeywords(toJson(keywords));
             userCustomFieldRepository.save(entity);
+            versionService.bump(userId);
         }
     }
 

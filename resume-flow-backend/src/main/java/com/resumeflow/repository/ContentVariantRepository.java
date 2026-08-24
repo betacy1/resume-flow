@@ -21,5 +21,11 @@ public interface ContentVariantRepository extends JpaRepository<ContentVariant, 
 
     long countByUserIdAndDeletedFalse(Long userId);
 
+    long countByUserIdAndJobDirectionNotNullAndDeletedFalse(Long userId);
+
+    long countByUserIdAndSourceTypeAndDeletedFalse(Long userId, String sourceType);
+
+    List<ContentVariant> findByUserIdAndSourceTypeAndDeletedFalse(Long userId, String sourceType);
+
     void deleteByUserId(Long userId);
 }

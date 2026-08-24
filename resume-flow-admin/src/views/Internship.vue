@@ -34,6 +34,9 @@
         <el-form-item label="是否默认"><el-switch v-model="editingForm.isDefault" /></el-form-item>
         <el-form-item label="经历描述"><el-input v-model="editingForm.description" type="textarea" :rows="6" /></el-form-item>
         <el-form-item label="亮点成果"><el-input v-model="editingForm.highlights" type="textarea" :rows="3" /></el-form-item>
+        <el-form-item label="模板展示">
+          <div style="color: #909399; font-size: 12px">各模板下的展示/自动填充/优先级请在“岗位模板管理 → 经历配置”中设置，实习经历本身不会被删除或排除</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>

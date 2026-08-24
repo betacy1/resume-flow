@@ -1,98 +1,89 @@
 /**
  * Content Script - 注入到网页中
- * 负责扫描页面字段、接收匹配结果并填充表单
+ * 负责扫描页面字段与填充表单；API 请求由 popup 发起（避免网页上下文的 CORS/混合内容限制）
  * 安全限制：不自动点击提交/确认/下一步/投递/保存并提交按钮
  */
 
 import { scanFields } from './services/fieldScanService';
 import { applyMatches, fillConfirmItem } from './services/autofillService';
-import { autofillMatch, type FieldInfo } from './services/apiClient';
+import type { AutofillMatchResponse } from './services/apiClient';
 import { MessageType } from './utils/events';
 import { fillFocusedElement } from './utils/domHelper';
+import { closePanel, togglePanel, panelExists, getPanelStatus, openPanel } from './panel/floatingPanel';
+import { getPanelState } from './services/panelStateService';
 
-// 监听来自 popup/background 的消息
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[ResumeFlow] Content script 收到消息:', message.type);
+// 防止编程式重复注入时重复注册监听器（隔离世界内 window 状态持久）
+const injectedFlag = window as unknown as { __rfContentInjected?: boolean };
+if (injectedFlag.__rfContentInjected) {
+  console.log('[ResumeFlow] Content script 已注入，跳过重复注册');
+} else {
+  injectedFlag.__rfContentInjected = true;
 
-  if (message.type === MessageType.SCAN_AND_FILL) {
-    handleScanAndFill(message.templateId, message.audienceType)
-      .then((result) => sendResponse(result))
-      .catch((error) => sendResponse({ error: error.message }));
-    return true; // 异步响应
-  }
+  // 监听来自 popup/background 的消息
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log('[ResumeFlow] Content script 收到消息:', message.type);
 
-  if (message.type === MessageType.CONFIRM_FILL) {
-    const success = fillConfirmItem({
-      fieldId: message.fieldId,
-      matchedFieldName: message.matchedFieldName || '',
-      confidence: message.confidence || 0,
-      value: message.value,
-    });
-    sendResponse({ success });
+    if (message.type === MessageType.SCAN_FIELDS) {
+      sendResponse({ fields: scanFields() });
+      return false;
+    }
+
+    if (message.type === MessageType.APPLY_MATCHES) {
+      const result = applyMatches(message.response as AutofillMatchResponse);
+      sendResponse(result);
+      return false;
+    }
+
+    if (message.type === MessageType.CONFIRM_FILL) {
+      const success = fillConfirmItem({
+        fieldId: message.fieldId,
+        matchedFieldName: message.matchedFieldName || '',
+        confidence: message.confidence || 0,
+        value: message.value,
+      });
+      sendResponse({ success });
+      return false;
+    }
+
+    if (message.type === MessageType.FILL_MATERIAL) {
+      handleFillMaterial(message.content)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ error: error.message }));
+      return true;
+    }
+
+    // ---- 悬浮面板：始终保留在页面上，不因点击外部/切换输入框而关闭 ----
+    if (message.type === MessageType.OPEN_PANEL) {
+      togglePanel()
+        .then(() => sendResponse({ ok: true }))
+        .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (message.type === MessageType.CLOSE_PANEL) {
+      closePanel()
+        .then(() => sendResponse({ ok: true }))
+        .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (message.type === MessageType.PANEL_STATE) {
+      getPanelStatus()
+        .then((status) => sendResponse({ exists: panelExists(), ...status }))
+        .catch(() => sendResponse({ exists: panelExists(), visible: false, minimized: false }));
+      return true;
+    }
+
     return false;
-  }
+  });
 
-  if (message.type === MessageType.FILL_MATERIAL) {
-    handleFillMaterial(message.content)
-      .then((result) => sendResponse(result))
-      .catch((error) => sendResponse({ error: error.message }));
-    return true;
-  }
-
-  return false;
-});
-
-/**
- * 扫描页面字段并调用后端匹配接口进行填充
- */
-async function handleScanAndFill(templateId: number | null, audienceType?: string): Promise<{
-  total: number;
-  filled: number;
-  skipped: number;
-  sensitive: number;
-  needConfirm: number;
-  unmatched: number;
-  details: string[];
-  confirmItems: { fieldId: string; matchedFieldName: string; confidence: number; value: string }[];
-  unmatchedFields: { fieldId: string; label: string }[];
-}> {
-  // 1. 扫描页面字段
-  const fields = scanFields();
-  console.log('[ResumeFlow] 扫描到字段数:', fields.length);
-
-  if (fields.length === 0) {
-    return { total: 0, filled: 0, skipped: 0, sensitive: 0, needConfirm: 0, unmatched: 0, details: ['未扫描到可填写字段'], confirmItems: [], unmatchedFields: [] };
-  }
-
-  // 2. 调用后端匹配接口（传入模板受众风格，后端据此选择内容版本）
-  const pageUrl = window.location.href;
-  const pageTitle = document.title || '';
-  const matchResponse = await autofillMatch(templateId, pageUrl, pageTitle, fields, audienceType);
-
-  // 3. 填充匹配结果（>=0.75 自动填，0.5~0.75 待确认，绝不自动提交表单）
-  const result = applyMatches(matchResponse);
-
-  // 4. 为未匹配字段附带页面标签，供弹窗手动绑定使用
-  const labelMap = new Map<string, string>(fields.map((f: FieldInfo) => [
-    f.fieldId,
-    f.label || f.questionText || f.placeholder || f.name || f.id,
-  ]));
-  const unmatchedFields = (matchResponse.unmatched || []).map((item) => ({
-    fieldId: item.fieldId,
-    label: labelMap.get(item.fieldId) || item.fieldId,
-  }));
-
-  return {
-    total: fields.length,
-    filled: result.filled,
-    skipped: result.skipped,
-    sensitive: result.sensitive,
-    needConfirm: result.needConfirm,
-    unmatched: result.unmatched,
-    details: result.details,
-    confirmItems: result.confirmItems,
-    unmatchedFields,
-  };
+  // 页面刷新后自动恢复悬浮面板：仅当上次状态 visible=true 时恢复；
+  // 用户主动关闭后（visible=false）不自动弹出。
+  getPanelState().then((st) => {
+    if (st.visible) {
+      openPanel().catch((err) => console.warn('[ResumeFlow] 恢复悬浮面板失败:', err));
+    }
+  });
 }
 
 /**

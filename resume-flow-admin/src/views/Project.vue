@@ -35,6 +35,9 @@
         <el-form-item label="职责内容"><el-input v-model="editingForm.responsibilities" type="textarea" :rows="5" /></el-form-item>
         <el-form-item label="项目成果"><el-input v-model="editingForm.result" type="textarea" :rows="3" /></el-form-item>
         <el-form-item label="汇总描述"><el-input v-model="editingForm.description" type="textarea" :rows="4" placeholder="用于普通文本框填写的完整描述" /></el-form-item>
+        <el-form-item label="模板展示">
+          <div style="color: #909399; font-size: 12px">各模板下的展示/自动填充/优先级请在“岗位模板管理 → 经历配置”中设置，项目经历本身不会被删除或排除</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>

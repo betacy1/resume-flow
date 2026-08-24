@@ -13,8 +13,7 @@
     "<all_urls>"
   ],
   "action": {
-    "default_popup": "src/popup/popup.html",
-    "default_title": "ResumeFlow 填表助手"
+    "default_title": "ResumeFlow 填表助手（点击开关悬浮面板）"
   },
   "background": {
     "service_worker": "src/background.ts",

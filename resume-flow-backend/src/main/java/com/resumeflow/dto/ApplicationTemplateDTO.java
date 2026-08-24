@@ -21,5 +21,7 @@ public class ApplicationTemplateDTO {
     private String careerPlan;
     private String aiCollaboration;
     private String skillKeywords;
+    /** 该模板下专业技能展示顺序，逗号分隔的 skillKey */
+    private String skillOrder;
     private Boolean isDefault;
 }

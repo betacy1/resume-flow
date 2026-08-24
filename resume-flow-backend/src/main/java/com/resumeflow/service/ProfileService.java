@@ -28,6 +28,7 @@ public class ProfileService {
     private final ProjectExperienceRepository projectRepository;
     private final SkillProfileRepository skillRepository;
     private final AwardCertificateRepository awardRepository;
+    private final ProfileVersionService versionService;
 
     /**
      * 查询当前用户完整简历信息
@@ -112,6 +113,7 @@ public class ProfileService {
         profile.setSelfIntroduction(dto.getSelfIntroduction());
 
         userProfileRepository.save(profile);
+        versionService.bump(userId);
     }
 
     // ========== 教育经历 ==========
@@ -146,6 +148,7 @@ public class ProfileService {
         entity.setDescription(dto.getDescription());
         entity.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
         educationRepository.save(entity);
+        versionService.bump(userId);
     }
 
     @Transactional
@@ -156,6 +159,7 @@ public class ProfileService {
                 .orElseThrow(() -> new BusinessException("教育经历不存在"));
         entity.setDeleted(true);
         educationRepository.save(entity);
+        versionService.bump(userId);
     }
 
     // ========== 实习经历 ==========
@@ -183,7 +187,10 @@ public class ProfileService {
         entity.setShortName(dto.getShortName());
         entity.setDescription(dto.getDescription());
         entity.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
+        entity.setAudienceExclude(dto.getAudienceExclude());
+        entity.setTemplatePriority(dto.getTemplatePriority());
         internshipRepository.save(entity);
+        versionService.bump(userId);
     }
 
     @Transactional
@@ -194,6 +201,7 @@ public class ProfileService {
                 .orElseThrow(() -> new BusinessException("实习经历不存在"));
         entity.setDeleted(true);
         internshipRepository.save(entity);
+        versionService.bump(userId);
     }
 
     // ========== 项目经历 ==========
@@ -222,7 +230,9 @@ public class ProfileService {
         entity.setResult(dto.getResult());
         entity.setTechStack(dto.getTechStack());
         entity.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
+        entity.setAudienceExclude(dto.getAudienceExclude());
         projectRepository.save(entity);
+        versionService.bump(userId);
     }
 
     @Transactional
@@ -233,6 +243,7 @@ public class ProfileService {
                 .orElseThrow(() -> new BusinessException("项目经历不存在"));
         entity.setDeleted(true);
         projectRepository.save(entity);
+        versionService.bump(userId);
     }
 
     // ========== 技能信息 ==========
@@ -249,11 +260,14 @@ public class ProfileService {
             entity = new SkillProfile();
             entity.setUserId(userId);
         }
+        entity.setSkillKey(dto.getSkillKey());
         entity.setSkillName(dto.getSkillName());
         entity.setLevel(dto.getLevel());
         entity.setCategory(dto.getCategory());
+        entity.setContent(dto.getContent());
         entity.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
         skillRepository.save(entity);
+        versionService.bump(userId);
     }
 
     @Transactional
@@ -264,6 +278,7 @@ public class ProfileService {
                 .orElseThrow(() -> new BusinessException("技能不存在"));
         entity.setDeleted(true);
         skillRepository.save(entity);
+        versionService.bump(userId);
     }
 
     // ========== 奖项证书 ==========
@@ -286,6 +301,7 @@ public class ProfileService {
         entity.setDescription(dto.getDescription());
         entity.setSortOrder(dto.getSortOrder() != null ? dto.getSortOrder() : 0);
         awardRepository.save(entity);
+        versionService.bump(userId);
     }
 
     @Transactional
@@ -296,6 +312,7 @@ public class ProfileService {
                 .orElseThrow(() -> new BusinessException("奖项不存在"));
         entity.setDeleted(true);
         awardRepository.save(entity);
+        versionService.bump(userId);
     }
 
     // ========== Entity -> DTO 转换 ==========
@@ -367,6 +384,8 @@ public class ProfileService {
         dto.setShortName(e.getShortName());
         dto.setDescription(e.getDescription());
         dto.setSortOrder(e.getSortOrder());
+        dto.setAudienceExclude(e.getAudienceExclude());
+        dto.setTemplatePriority(e.getTemplatePriority());
         return dto;
     }
 
@@ -385,15 +404,18 @@ public class ProfileService {
         dto.setResult(e.getResult());
         dto.setTechStack(e.getTechStack());
         dto.setSortOrder(e.getSortOrder());
+        dto.setAudienceExclude(e.getAudienceExclude());
         return dto;
     }
 
     private SkillProfileDTO toSkillDTO(SkillProfile e) {
         SkillProfileDTO dto = new SkillProfileDTO();
         dto.setId(e.getId());
+        dto.setSkillKey(e.getSkillKey());
         dto.setSkillName(e.getSkillName());
         dto.setLevel(e.getLevel());
         dto.setCategory(e.getCategory());
+        dto.setContent(e.getContent());
         dto.setSortOrder(e.getSortOrder());
         return dto;
     }

@@ -47,6 +47,10 @@ public class ApplicationTemplate extends BaseEntity {
     @Column(name = "skill_keywords", columnDefinition = "TEXT")
     private String skillKeywords;
 
+    /** 该模板下专业技能展示顺序，逗号分隔的 skillKey，如 skill_backend,skill_distributed_stability,... */
+    @Column(name = "skill_order", length = 512)
+    private String skillOrder;
+
     @Column(name = "is_default")
     private Boolean isDefault = false;
 }

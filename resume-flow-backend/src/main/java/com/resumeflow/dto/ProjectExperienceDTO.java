@@ -21,4 +21,6 @@ public class ProjectExperienceDTO {
     private String result;
     private String techStack;
     private Integer sortOrder;
+    /** 排除的受众场景（逗号分隔，如 big_tech） */
+    private String audienceExclude;
 }

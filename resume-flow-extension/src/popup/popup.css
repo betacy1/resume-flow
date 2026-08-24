@@ -168,3 +168,17 @@ h3 {
   font-size: 11px;
   cursor: pointer;
 }
+
+.tip {
+  color: #909399;
+  font-size: 11px;
+}
+
+.sync-status {
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.6;
+  border: 1px dashed #ebeef5;
+  border-radius: 4px;
+  padding: 6px 8px;
+}

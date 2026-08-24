@@ -20,6 +20,10 @@ spring:
     console:
       enabled: false
 
+# prod 默认不重建 demo 数据；首次部署需要初始化时设置环境变量 DEMO_INIT_ENABLED=true
+resumeflow:
+  demo-init-enabled: false
+
 logging:
   level:
     com.resumeflow: info

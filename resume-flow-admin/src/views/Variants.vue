@@ -2,8 +2,8 @@
   <div>
     <h2>内容版本管理</h2>
     <p style="color: #909399; margin-bottom: 12px">
-      每条实习/项目/素材维护 4 种受众风格（大厂/国央企/银行/通用）× 4 种长度（200/300/500/1000字以内）共 16 个版本，
-      插件按当前模板与页面字数限制自动选择。
+      每条实习/项目/素材按 场景风格 × 岗位方向 × 字段类型 × 字数限制 维护内容版本，
+      插件按当前模板、岗位方向与页面字段类型/字数自动选择；大厂版不包含工行相关实习与项目。
     </p>
 
     <el-card style="margin-bottom: 16px">
@@ -20,14 +20,40 @@
             <el-option v-for="s in sources" :key="s.id" :label="s.label" :value="s.id" />
           </el-select>
         </el-form-item>
+        <el-form-item label="场景">
+          <el-select v-model="filterAudience" style="width: 120px" clearable>
+            <el-option v-for="(label, key) in audienceLabels" :key="key" :label="label" :value="key" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="岗位方向">
+          <el-select v-model="filterDirection" style="width: 140px" clearable>
+            <el-option v-for="(label, key) in directionLabels" :key="key" :label="label" :value="key" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="字段类型">
+          <el-select v-model="filterFieldType" style="width: 150px" clearable>
+            <el-option v-for="(label, key) in fieldTypeLabels" :key="key" :label="label" :value="key" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="字数">
+          <el-select v-model="filterLength" style="width: 120px" clearable>
+            <el-option v-for="(label, key) in lengthLabels" :key="key" :label="label" :value="key" />
+          </el-select>
+        </el-form-item>
       </el-form>
     </el-card>
 
-    <el-table :data="variants" v-loading="loading" border>
-      <el-table-column label="受众风格" width="120">
+    <el-table :data="filteredVariants" v-loading="loading" border>
+      <el-table-column label="受众风格" width="100">
         <template #default="{ row }">
           <el-tag :type="audienceTagType(row.audienceType)">{{ audienceLabel(row.audienceType) }}</el-tag>
         </template>
+      </el-table-column>
+      <el-table-column label="岗位方向" width="100">
+        <template #default="{ row }">{{ directionLabel(row.jobDirection) }}</template>
+      </el-table-column>
+      <el-table-column label="字段类型" width="110">
+        <template #default="{ row }">{{ fieldTypeLabel(row.fieldType) }}</template>
       </el-table-column>
       <el-table-column label="长度" width="110">
         <template #default="{ row }">{{ lengthLabel(row.lengthType) }}</template>
@@ -57,6 +83,12 @@
         <el-form-item label="受众风格">
           <span>{{ audienceLabel(editingForm.audienceType) }}</span>
         </el-form-item>
+        <el-form-item label="岗位方向">
+          <span>{{ directionLabel(editingForm.jobDirection) }}</span>
+        </el-form-item>
+        <el-form-item label="字段类型">
+          <span>{{ fieldTypeLabel(editingForm.fieldType) }}</span>
+        </el-form-item>
         <el-form-item label="长度">
           <span>{{ lengthLabel(editingForm.lengthType) }}</span>
         </el-form-item>
@@ -74,7 +106,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { profileApi } from '@/api/profile';
@@ -87,6 +119,10 @@ const sourceType = ref<string>('internship');
 const sourceId = ref<number | undefined>(undefined);
 const sources = ref<{ id: number; label: string }[]>([]);
 const variants = ref<ContentVariant[]>([]);
+const filterAudience = ref<string>('');
+const filterDirection = ref<string>('');
+const filterFieldType = ref<string>('');
+const filterLength = ref<string>('');
 const loading = ref(false);
 const saving = ref(false);
 const dialogVisible = ref(false);
@@ -98,6 +134,25 @@ const audienceLabels: Record<string, string> = {
   bank: '银行版',
   general: '通用版',
 };
+const directionLabels: Record<string, string> = {
+  backend: '后端开发',
+  ai: 'AI 应用工程化',
+  fintech: '金融科技',
+  general: '通用',
+};
+const fieldTypeLabels: Record<string, string> = {
+  internship_overview: '实习描述',
+  internship_responsibility: '主要职责',
+  internship_result: '工作成果',
+  internship_tech_stack: '技术栈',
+  internship_combined: '合并型',
+  project_overview: '项目描述',
+  project_responsibility: '项目职责',
+  project_result: '项目成果',
+  project_tech_stack: '项目技术栈',
+  project_combined: '项目合并型',
+  combined: '合并型',
+};
 const lengthLabels: Record<string, string> = {
   within_200: '200字以内',
   within_300: '300字以内',
@@ -108,9 +163,25 @@ const lengthLabels: Record<string, string> = {
 function audienceLabel(type?: string) {
   return (type && audienceLabels[type]) || type || '-';
 }
+function directionLabel(type?: string) {
+  return (type && directionLabels[type]) || type || '-';
+}
+function fieldTypeLabel(type?: string) {
+  return (type && fieldTypeLabels[type]) || type || '-';
+}
 function lengthLabel(type?: string) {
   return (type && lengthLabels[type]) || type || '-';
 }
+
+const filteredVariants = computed(() =>
+  variants.value.filter((v) => {
+    if (filterAudience.value && v.audienceType !== filterAudience.value) return false;
+    if (filterDirection.value && v.jobDirection !== filterDirection.value) return false;
+    if (filterFieldType.value && v.fieldType !== filterFieldType.value) return false;
+    if (filterLength.value && v.lengthType !== filterLength.value) return false;
+    return true;
+  }),
+);
 function audienceTagType(type?: string) {
   if (type === 'big_tech') return 'primary';
   if (type === 'state_owned') return 'warning';
@@ -150,11 +221,21 @@ async function loadVariants() {
   try {
     const list = await variantApi.list(sourceType.value, sourceId.value);
     const audienceOrder = ['big_tech', 'state_owned', 'bank', 'general'];
+    const directionOrder = ['backend', 'ai', 'fintech', 'general'];
+    const fieldTypeOrder = ['internship_overview', 'internship_responsibility', 'internship_result',
+      'internship_tech_stack', 'internship_combined', 'project_overview', 'project_responsibility',
+      'project_result', 'project_tech_stack', 'project_combined', 'combined'];
     const lengthOrder = ['within_200', 'within_300', 'within_500', 'within_1000'];
     variants.value = [...list].sort((a, b) => {
       const ai = audienceOrder.indexOf(a.audienceType || '');
       const bi = audienceOrder.indexOf(b.audienceType || '');
       if (ai !== bi) return ai - bi;
+      const di = directionOrder.indexOf(a.jobDirection || '');
+      const dj = directionOrder.indexOf(b.jobDirection || '');
+      if (di !== dj) return di - dj;
+      const fi = fieldTypeOrder.indexOf(a.fieldType || '');
+      const fj = fieldTypeOrder.indexOf(b.fieldType || '');
+      if (fi !== fj) return fi - fj;
       return lengthOrder.indexOf(a.lengthType || '') - lengthOrder.indexOf(b.lengthType || '');
     });
   } finally {

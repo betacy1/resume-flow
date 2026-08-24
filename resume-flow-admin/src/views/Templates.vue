@@ -13,8 +13,9 @@
           <el-tag v-if="row.isDefault" type="success">是</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="150">
+      <el-table-column label="操作" width="220">
         <template #default="{ row }">
+          <el-button size="small" type="primary" plain @click="openConfigDialog(row)">经历配置</el-button>
           <el-button size="small" @click="openDialog(row)">编辑</el-button>
           <el-button size="small" type="danger" @click="handleDelete(row.id)">删除</el-button>
         </template>
@@ -55,19 +56,82 @@
         <el-button type="primary" @click="handleSave" :loading="saving">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="configDialogVisible" :title="`经历配置：${configTemplateName}`" width="980px">
+      <div style="margin-bottom: 8px; color: #909399; font-size: 12px">
+        模板差异通过展示/自动填充/优先级配置实现，不会删除任何经历、项目与内容版本；关闭“参与自动填充”后仍可在插件中手动选择填入。
+      </div>
+      <h4 style="margin: 8px 0">实习经历</h4>
+      <el-table :data="internConfigs" border size="small" v-loading="configLoading">
+        <el-table-column prop="sourceName" label="实习经历" min-width="110" />
+        <el-table-column label="简历展示" width="90">
+          <template #default="{ row }"><el-switch v-model="row.includedInResume" /></template>
+        </el-table-column>
+        <el-table-column label="参与自动填充" width="110">
+          <template #default="{ row }"><el-switch v-model="row.autoFillEnabled" /></template>
+        </el-table-column>
+        <el-table-column label="填充优先级" width="110">
+          <template #default="{ row }"><el-input-number v-model="row.autoFillPriority" :min="1" :max="99" size="small" controls-position="right" style="width: 90px" /></template>
+        </el-table-column>
+        <el-table-column label="可手动选择" width="90">
+          <template #default="{ row }"><el-switch v-model="row.manualSelectable" /></template>
+        </el-table-column>
+        <el-table-column label="展示顺序" width="100">
+          <template #default="{ row }"><el-input-number v-model="row.displayOrder" :min="1" :max="99" size="small" controls-position="right" style="width: 80px" /></template>
+        </el-table-column>
+        <el-table-column label="侧重点标签" min-width="200">
+          <template #default="{ row }"><el-input v-model="row.emphasisTags" size="small" placeholder="逗号分隔" /></template>
+        </el-table-column>
+      </el-table>
+      <h4 style="margin: 12px 0 8px">项目经历</h4>
+      <el-table :data="projectConfigs" border size="small" v-loading="configLoading">
+        <el-table-column prop="sourceName" label="项目" min-width="110" />
+        <el-table-column label="简历展示" width="90">
+          <template #default="{ row }"><el-switch v-model="row.includedInResume" /></template>
+        </el-table-column>
+        <el-table-column label="参与自动填充" width="110">
+          <template #default="{ row }"><el-switch v-model="row.autoFillEnabled" /></template>
+        </el-table-column>
+        <el-table-column label="填充优先级" width="110">
+          <template #default="{ row }"><el-input-number v-model="row.autoFillPriority" :min="1" :max="99" size="small" controls-position="right" style="width: 90px" /></template>
+        </el-table-column>
+        <el-table-column label="可手动选择" width="90">
+          <template #default="{ row }"><el-switch v-model="row.manualSelectable" /></template>
+        </el-table-column>
+        <el-table-column label="展示顺序" width="100">
+          <template #default="{ row }"><el-input-number v-model="row.displayOrder" :min="1" :max="99" size="small" controls-position="right" style="width: 80px" /></template>
+        </el-table-column>
+        <el-table-column label="侧重点标签" min-width="200">
+          <template #default="{ row }"><el-input v-model="row.emphasisTags" size="small" placeholder="逗号分隔" /></template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="configDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleSaveConfigs" :loading="configSaving">保存配置</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { templateApi, type ApplicationTemplateDTO } from '@/api/template';
+import { templateApi, templateConfigApi, type ApplicationTemplateDTO, type TemplateExperienceConfigDTO } from '@/api/template';
 
 const list = ref<ApplicationTemplateDTO[]>([]);
 const loading = ref(false);
 const saving = ref(false);
 const dialogVisible = ref(false);
 const editingForm = reactive<ApplicationTemplateDTO>({});
+
+// 模板-经历配置弹窗状态
+const configDialogVisible = ref(false);
+const configLoading = ref(false);
+const configSaving = ref(false);
+const configTemplateId = ref<number | null>(null);
+const configTemplateName = ref('');
+const internConfigs = ref<TemplateExperienceConfigDTO[]>([]);
+const projectConfigs = ref<TemplateExperienceConfigDTO[]>([]);
 
 const audienceLabels: Record<string, string> = {
   big_tech: '大厂版',
@@ -121,6 +185,32 @@ async function handleDelete(id: number) {
   await templateApi.delete(id);
   ElMessage.success('删除成功');
   await loadData();
+}
+
+async function openConfigDialog(row: ApplicationTemplateDTO) {
+  configTemplateId.value = row.id || null;
+  configTemplateName.value = row.name || '';
+  configDialogVisible.value = true;
+  configLoading.value = true;
+  try {
+    const configs = await templateConfigApi.list(row.id!);
+    internConfigs.value = configs.filter((c) => c.sourceType === 'internship').sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0));
+    projectConfigs.value = configs.filter((c) => c.sourceType === 'project').sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0));
+  } finally {
+    configLoading.value = false;
+  }
+}
+
+async function handleSaveConfigs() {
+  if (!configTemplateId.value) return;
+  configSaving.value = true;
+  try {
+    await templateConfigApi.save(configTemplateId.value, [...internConfigs.value, ...projectConfigs.value]);
+    ElMessage.success('经历配置已保存');
+    configDialogVisible.value = false;
+  } finally {
+    configSaving.value = false;
+  }
 }
 
 onMounted(loadData);

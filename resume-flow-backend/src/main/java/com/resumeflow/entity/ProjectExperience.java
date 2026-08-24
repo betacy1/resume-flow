@@ -51,4 +51,8 @@ public class ProjectExperience extends BaseEntity {
 
     @Column(name = "sort_order")
     private Integer sortOrder = 0;
+
+    /** 排除的受众场景（逗号分隔，如 big_tech），该场景下不会选用此项目 */
+    @Column(name = "audience_exclude", length = 100)
+    private String audienceExclude;
 }

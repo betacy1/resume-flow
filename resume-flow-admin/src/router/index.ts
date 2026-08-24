@@ -80,6 +80,18 @@ const router = createRouter({
           meta: { title: '岗位模板' },
         },
         {
+          path: 'resume-preview',
+          name: 'ResumePreview',
+          component: () => import('@/views/ResumePreview.vue'),
+          meta: { title: '简历模板预览' },
+        },
+        {
+          path: 'sync-status',
+          name: 'SyncStatus',
+          component: () => import('@/views/SyncStatus.vue'),
+          meta: { title: '同步状态' },
+        },
+        {
           path: 'materials',
           name: 'Materials',
           component: () => import('@/views/Materials.vue'),

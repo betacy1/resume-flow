@@ -21,6 +21,7 @@ import java.util.List;
 public class ApplicationTemplateService {
 
     private final ApplicationTemplateRepository templateRepository;
+    private final ProfileVersionService versionService;
 
     /**
      * 查询当前用户所有岗位模板
@@ -52,6 +53,7 @@ public class ApplicationTemplateService {
         applyDTO(dto, entity);
 
         templateRepository.save(entity);
+        versionService.bump(userId);
         log.info("用户 {} 创建岗位模板: {}", userId, dto.getName());
         return entity.getId();
     }
@@ -65,6 +67,7 @@ public class ApplicationTemplateService {
         ApplicationTemplate entity = getTemplateById(id, userId);
         applyDTO(dto, entity);
         templateRepository.save(entity);
+        versionService.bump(userId);
     }
 
     /**
@@ -76,6 +79,7 @@ public class ApplicationTemplateService {
         ApplicationTemplate entity = getTemplateById(id, userId);
         entity.setDeleted(true);
         templateRepository.save(entity);
+        versionService.bump(userId);
     }
 
     private void applyDTO(ApplicationTemplateDTO dto, ApplicationTemplate entity) {
@@ -93,6 +97,9 @@ public class ApplicationTemplateService {
         entity.setCareerPlan(dto.getCareerPlan());
         entity.setAiCollaboration(dto.getAiCollaboration());
         entity.setSkillKeywords(dto.getSkillKeywords());
+        if (dto.getSkillOrder() != null) {
+            entity.setSkillOrder(dto.getSkillOrder());
+        }
         if (dto.getIsDefault() != null) {
             entity.setIsDefault(dto.getIsDefault());
         }
@@ -111,6 +118,7 @@ public class ApplicationTemplateService {
         dto.setCareerPlan(e.getCareerPlan());
         dto.setAiCollaboration(e.getAiCollaboration());
         dto.setSkillKeywords(e.getSkillKeywords());
+        dto.setSkillOrder(e.getSkillOrder());
         dto.setIsDefault(e.getIsDefault());
         return dto;
     }

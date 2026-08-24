@@ -3,6 +3,7 @@ package com.resumeflow.controller;
 import com.resumeflow.common.Result;
 import com.resumeflow.dto.ApplicationTemplateDTO;
 import com.resumeflow.service.ApplicationTemplateService;
+import com.resumeflow.service.TemplatePreviewService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -10,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 岗位模板 Controller
@@ -21,6 +23,7 @@ import java.util.List;
 public class ApplicationTemplateController {
 
     private final ApplicationTemplateService templateService;
+    private final TemplatePreviewService previewService;
 
     @Operation(summary = "查询所有岗位模板")
     @GetMapping
@@ -46,5 +49,11 @@ public class ApplicationTemplateController {
     public Result<Void> delete(@PathVariable Long id) {
         templateService.deleteTemplate(id);
         return Result.success();
+    }
+
+    @Operation(summary = "模板简历预览：按模板配置生成完整简历（含专业技能模块）")
+    @GetMapping("/{id}/resume-preview")
+    public Result<Map<String, Object>> resumePreview(@PathVariable Long id) {
+        return Result.success(previewService.preview(id));
     }
 }

@@ -45,6 +45,10 @@
           <el-icon><Document /></el-icon>
           <span>岗位模板管理</span>
         </el-menu-item>
+        <el-menu-item index="/resume-preview">
+          <el-icon><View /></el-icon>
+          <span>简历模板预览</span>
+        </el-menu-item>
         <el-menu-item index="/fields">
           <el-icon><EditPen /></el-icon>
           <span>字段管理</span>
@@ -56,6 +60,10 @@
         <el-menu-item index="/logs">
           <el-icon><List /></el-icon>
           <span>自动填充日志</span>
+        </el-menu-item>
+        <el-menu-item index="/sync-status">
+          <el-icon><Refresh /></el-icon>
+          <span>同步状态</span>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -76,7 +84,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useRouter } from 'vue-router';
 import { authApi } from '@/api/auth';
 import {
-  HomeFilled, User, Reading, Briefcase, Files, Star, Document, Collection, List, EditPen, Trophy, Notebook,
+  HomeFilled, User, Reading, Briefcase, Files, Star, Document, Collection, List, EditPen, Trophy, Notebook, View, Refresh,
 } from '@element-plus/icons-vue';
 
 const authStore = useAuthStore();

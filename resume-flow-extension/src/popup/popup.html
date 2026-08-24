@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ResumeFlow 填表助手</title>
+  <title>ResumeFlow</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
@@ -12,7 +12,7 @@
       <h2>ResumeFlow 登录</h2>
       <div class="form-group">
         <label>后端地址</label>
-        <input type="text" id="backend-url" value="http://localhost:8080" placeholder="http://localhost:8080" />
+        <input type="text" id="backend-url" value="http://123.57.70.7" placeholder="http://123.57.70.7" />
       </div>
       <div class="form-group">
         <label>用户名</label>
@@ -33,48 +33,22 @@
       </div>
 
       <div class="card">
-        <div class="form-group">
-          <label>当前岗位模板</label>
-          <select id="template-select"></select>
-        </div>
-        <button id="btn-scan-fill" class="btn btn-primary btn-block">一键填写当前页面</button>
-        <p id="fill-result" class="msg"></p>
-      </div>
-
-      <div class="card" id="confirm-card" style="display:none;">
-        <h3>建议人工确认（置信度 0.5~0.75）</h3>
-        <div id="confirm-list" class="field-list"></div>
-      </div>
-
-      <div class="card" id="unmatched-card" style="display:none;">
-        <h3>未匹配字段（可绑定到简历字段）</h3>
-        <div id="unmatched-list" class="field-list"></div>
+        <h3>悬浮面板</h3>
+        <button id="btn-toggle-panel" class="btn btn-primary btn-block">打开 / 切换悬浮面板</button>
+        <button id="btn-close-panel" class="btn btn-secondary btn-block">关闭当前页面面板</button>
+        <p class="tip">也可以直接点击浏览器工具栏的插件图标开关面板。</p>
       </div>
 
       <div class="card">
-        <h3>字段快速编辑</h3>
-        <div class="form-group">
-          <select id="field-select"></select>
-        </div>
-        <div class="form-group">
-          <textarea id="field-value" rows="4" placeholder="编辑字段内容"></textarea>
-        </div>
-        <button id="btn-save-field" class="btn btn-secondary btn-block">保存字段内容</button>
+        <h3>数据同步</h3>
+        <div id="sync-status" class="sync-status">检测中…</div>
+        <button id="btn-sync" class="btn btn-secondary btn-block">手动同步最新数据</button>
+        <p id="sync-msg" class="msg"></p>
       </div>
 
       <div class="card">
-        <h3>素材快速新增</h3>
-        <div class="form-group"><input id="material-title" placeholder="素材标题" /></div>
-        <div class="form-group">
-          <select id="material-type"></select>
-        </div>
-        <div class="form-group"><textarea id="material-content" rows="4" placeholder="素材内容"></textarea></div>
-        <button id="btn-add-material" class="btn btn-secondary btn-block">新增素材</button>
-      </div>
-
-      <div class="card">
-        <h3>填入当前输入框</h3>
-        <div id="material-buttons" class="material-buttons"></div>
+        <button id="btn-open-admin" class="btn btn-block">打开管理后台</button>
+        <button id="btn-options" class="btn btn-block">设置（后端地址）</button>
       </div>
     </div>
   </div>

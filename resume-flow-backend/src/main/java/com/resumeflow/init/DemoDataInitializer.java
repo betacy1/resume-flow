@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.resumeflow.entity.*;
 import com.resumeflow.repository.*;
+import com.resumeflow.service.ProfileVersionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -25,9 +26,16 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@Profile("dev")
+@Profile({"dev", "prod"})
 @RequiredArgsConstructor
 public class DemoDataInitializer implements CommandLineRunner {
+
+    /**
+     * prod 环境默认不初始化（避免覆盖线上已维护的数据）；
+     * ECS 首次部署需要初始化/重建 demo 数据时，设置环境变量 DEMO_INIT_ENABLED=true 后重启。
+     */
+    @org.springframework.beans.factory.annotation.Value("${DEMO_INIT_ENABLED:${resumeflow.demo-init-enabled:true}}")
+    private boolean initEnabled;
 
     private final SysUserRepository sysUserRepository;
     private final UserProfileRepository userProfileRepository;
@@ -40,6 +48,9 @@ public class DemoDataInitializer implements CommandLineRunner {
     private final AnswerMaterialRepository materialRepository;
     private final UserCustomFieldRepository customFieldRepository;
     private final ContentVariantRepository contentVariantRepository;
+    private final TemplateExperienceConfigRepository templateConfigRepository;
+    private final ProfileSyncStateRepository syncStateRepository;
+    private final ProfileVersionService versionService;
     private final PasswordEncoder passwordEncoder;
     private final TransactionTemplate transactionTemplate;
     private final ObjectMapper objectMapper;
@@ -85,8 +96,80 @@ public class DemoDataInitializer implements CommandLineRunner {
             该岗位与我的技术栈和职业规划高度匹配：我在 Java、Go 后端开发、分布式系统与 AI 应用工程方面的实习和项目经验，\
             可以直接支撑岗位工作内容；同时我希望通过该岗位继续深入业务理解，提升系统设计与复杂问题拆解能力。""";
 
+    // ==================== 专业技能（七个分组，公共数据） ====================
+
+    private static final String SKILL_BACKEND = "熟悉 Java、Go，熟悉 Spring Boot、MyBatis-Plus、JPA、Kitex、Gin、"
+            + "RESTful API、gRPC / Proto、Thrift IDL，具备微服务分层开发、接口设计和后端业务建模经验。";
+    private static final String SKILL_DATABASE_MIDDLEWARE = "熟悉 MySQL、Redis、Elasticsearch、Milvus、OSS，"
+            + "具备数据建模、缓存设计、索引优化、向量检索链路接入和高频查询场景优化经验。";
+    private static final String SKILL_DISTRIBUTED_STABILITY = "熟悉 RPC 调用、配置中心、异步消息、TCC 配置化规则、"
+            + "重试补偿、幂等控制、链路日志、熔断降级、异常处理和服务解耦，具备复杂业务状态流转和系统可靠性建设经验。";
+    private static final String SKILL_AI_ENGINEERING = "具备 Cloud VLM、Robot AIUI、RAG、Agent、多模态视觉处理、"
+            + "多模型路由、流式响应和智能对话系统开发经验，熟悉 AI 能力接入、模型服务调用、上下文透传和工程化落地流程。";
+    private static final String SKILL_DEVOPS_PLATFORM = "具备持续交付平台、自动化发布、镜像构建、模板部署、自动投验、"
+            + "跨集群迁移、任务审计和失败恢复相关实践经验，熟悉 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施能力封装。";
+    private static final String SKILL_FRONTEND_TOOLS = "了解 Vue3、TypeScript、Vite、Element Plus，具备前后端联调、"
+            + "接口文档编写、Postman 测试和 Git 协作经验；熟悉 Cursor、Codex、Claude Opus、GPT 等 AI 辅助开发工具。";
+    private static final String SKILL_COMPUTER_BASIC = "具备数据结构与算法基础，熟悉操作系统、计算机网络、JVM 基本原理和"
+            + "多线程并发，能够结合业务场景进行问题定位、性能分析和代码优化。";
+
+    /** 七个技能分组：skillKey、标题、内容 */
+    private static final String[][] SKILL_GROUPS = {
+            {"skill_backend", "后端开发", SKILL_BACKEND},
+            {"skill_database_middleware", "数据库与中间件", SKILL_DATABASE_MIDDLEWARE},
+            {"skill_distributed_stability", "分布式与稳定性", SKILL_DISTRIBUTED_STABILITY},
+            {"skill_ai_engineering", "AI 应用工程化", SKILL_AI_ENGINEERING},
+            {"skill_devops_platform", "DevOps 与平台工程", SKILL_DEVOPS_PLATFORM},
+            {"skill_frontend_tools", "前端与工程工具", SKILL_FRONTEND_TOOLS},
+            {"skill_computer_basic", "计算机基础", SKILL_COMPUTER_BASIC},
+    };
+
+    // ==================== 各模板专业技能简短版（侧重不同） ====================
+
+    private static final String SKILL_SHORT_BIG_TECH = "熟悉 Java、Go、Spring Boot、Kitex、Gin、RESTful API、"
+            + "gRPC / Proto、Thrift IDL，具备微服务分层开发和复杂业务建模经验；熟悉 MySQL、Redis、Elasticsearch、"
+            + "Milvus、MQ、TCC、幂等控制、重试补偿、熔断降级和链路日志；具备 Cloud VLM、Robot AIUI、RAG、Agent、"
+            + "多模型路由、流式响应和 AI 应用工程化落地经验。";
+    private static final String SKILL_SHORT_STATE_OWNED = "熟悉 Java、Go、Spring Boot、JPA、MyBatis-Plus、"
+            + "RESTful API、gRPC / Proto，具备后端接口设计、领域建模和系统平台建设经验；熟悉 Redis、MySQL、异步消息、"
+            + "重试补偿、幂等控制、链路日志和异常处理；具备持续交付、自动投验、任务审计、跨系统协同、Cloud IoT、"
+            + "Cloud VLM、Robot AIUI 等智能系统工程化实践经验。";
+    private static final String SKILL_SHORT_BANK = "熟悉 Java、Go、Spring Boot、JPA、Kitex、RESTful API、"
+            + "gRPC / Proto、Thrift IDL，具备金融科技和支付账户类后端研发经验；熟悉 MySQL、Redis、MQ、TCC、RPC、"
+            + "幂等控制、重试补偿、异常处理和链路日志；具备账户状态治理、资产安全校验、风险拦截、持续交付、自动投验、"
+            + "发布审计和系统可靠性建设经验。";
+    private static final String SKILL_SHORT_GENERAL = "熟悉 Java、Go、Spring Boot、MyBatis-Plus、JPA、Kitex、Gin、"
+            + "RESTful API、gRPC / Proto，具备后端分层开发、接口设计和业务建模经验；熟悉 MySQL、Redis、"
+            + "Elasticsearch、Milvus、MQ、TCC、幂等控制、重试补偿和异常处理；具备支付账户治理、智能云平台、"
+            + "AI 应用工程化和 DevOps 平台研发实践经验。";
+
+    // ==================== 各模板专业技能排序（侧重不同） ====================
+
+    private static final String SKILL_ORDER_BIG_TECH = "skill_backend,skill_distributed_stability,"
+            + "skill_database_middleware,skill_ai_engineering,skill_frontend_tools,skill_computer_basic,"
+            + "skill_devops_platform";
+    private static final String SKILL_ORDER_STATE_OWNED = "skill_backend,skill_devops_platform,"
+            + "skill_ai_engineering,skill_distributed_stability,skill_database_middleware,skill_computer_basic,"
+            + "skill_frontend_tools";
+    private static final String SKILL_ORDER_BANK = "skill_backend,skill_distributed_stability,"
+            + "skill_devops_platform,skill_database_middleware,skill_ai_engineering,skill_computer_basic,"
+            + "skill_frontend_tools";
+    private static final String SKILL_ORDER_GENERAL_BACKEND = "skill_backend,skill_database_middleware,"
+            + "skill_distributed_stability,skill_ai_engineering,skill_devops_platform,skill_frontend_tools,"
+            + "skill_computer_basic";
+
+    /** 技能字段匹配关键词（招聘网站字段名命中即自动填入技能内容） */
+    private static final List<String> SKILL_MATCH_KEYWORDS = List.of(
+            "专业技能", "技能", "个人技能", "技能特长", "技术能力", "技术栈", "掌握技能", "专业能力", "开发技能",
+            "计算机技能", "编程技能", "熟悉技术", "软件技能", "核心技能", "技术关键词", "技能标签", "IT技能",
+            "技术专长", "相关技能");
+
     @Override
     public void run(String... args) {
+        if (!initEnabled) {
+            log.info("DEMO_INIT_ENABLED=false，跳过 demo 数据初始化");
+            return;
+        }
         transactionTemplate.executeWithoutResult(status -> init());
     }
 
@@ -101,8 +184,11 @@ public class DemoDataInitializer implements CommandLineRunner {
         });
         Long userId = demo.getId();
 
-        if (contentVariantRepository.countByUserIdAndDeletedFalse(userId) > 0) {
-            log.info("demo 用户数据已初始化，跳过");
+        if (contentVariantRepository.countByUserIdAndDeletedFalse(userId) > 0
+                && contentVariantRepository.countByUserIdAndJobDirectionNotNullAndDeletedFalse(userId) > 0
+                && templateConfigRepository.countByUserIdAndDeletedFalse(userId) > 0
+                && contentVariantRepository.countByUserIdAndSourceTypeAndDeletedFalse(userId, "skill") > 0) {
+            log.info("demo 用户数据已初始化（含岗位方向维度版本、模板经历配置与专业技能版本），跳过");
             return;
         }
 
@@ -114,10 +200,13 @@ public class DemoDataInitializer implements CommandLineRunner {
         List<ProjectExperience> projects = initProjects(userId);
         initAwards(userId);
         initSkills(userId);
-        initTemplates(userId);
+        Map<String, ApplicationTemplate> templates = initTemplates(userId);
         Map<String, AnswerMaterial> materials = initMaterials(userId);
         initCustomFields(userId, internships, projects, materials);
         initVariants(userId, internships, projects, materials);
+        initSkillVariants(userId, templates);
+        initTemplateConfigs(userId, templates, internships, projects);
+        versionService.rebuild(userId);
         log.info("demo 用户数据初始化完成：2 段教育经历、3 条实习、6 个项目、4 个模板、内容版本 {} 条",
                 contentVariantRepository.countByUserIdAndDeletedFalse(userId));
     }
@@ -125,6 +214,7 @@ public class DemoDataInitializer implements CommandLineRunner {
     /** 旧库升级：清理历史业务数据后重建（保留用户与登录凭证） */
     private void cleanup(Long userId) {
         contentVariantRepository.deleteByUserId(userId);
+        templateConfigRepository.deleteByUserId(userId);
         customFieldRepository.deleteByUserId(userId);
         materialRepository.deleteByUserId(userId);
         templateRepository.deleteByUserId(userId);
@@ -133,6 +223,7 @@ public class DemoDataInitializer implements CommandLineRunner {
         projectRepository.deleteByUserId(userId);
         internshipRepository.deleteByUserId(userId);
         educationRepository.deleteByUserId(userId);
+        syncStateRepository.deleteByUserId(userId);
     }
 
     // ==================== 基础信息 ====================
@@ -234,6 +325,8 @@ public class DemoDataInitializer implements CommandLineRunner {
 
         List<InternshipExperience> result = new ArrayList<>();
         int order = 0;
+        // 三段实习全部完整保存；模板差异（展示/自动填充/优先级）由 template_experience_config 配置表控制，
+        // 不再在经历实体上做受众排除。
         for (InternshipDef def : defs) {
             InternshipExperience entity = new InternshipExperience();
             entity.setUserId(userId);
@@ -311,8 +404,9 @@ public class DemoDataInitializer implements CommandLineRunner {
             entity.setProjectIntro(def.intro);
             entity.setResponsibilities(def.responsibilities);
             entity.setResult(def.result);
-            entity.setDescription(def.intro + def.responsibilities + def.result);
-            entity.setShortName(def.shortName);
+            entity.setDescription(def.intro() + def.responsibilities() + def.result());
+            entity.setShortName(def.shortName());
+            // 所有项目全部保留（含工行 DevOps 项目）；模板差异由 template_experience_config 配置表控制
             entity.setIsDefault(order == 0);
             entity.setSortOrder(order++);
             result.add(projectRepository.save(entity));
@@ -342,20 +436,14 @@ public class DemoDataInitializer implements CommandLineRunner {
     }
 
     private void initSkills(Long userId) {
-        String[][] skills = {
-                {"开发语言", "Java、Go、C++、JavaScript"},
-                {"后端开发", "Spring Boot、MyBatis-Plus、Kitex、Gin、RESTful API、gRPC、Proto"},
-                {"数据库与中间件", "MySQL、Redis、Elasticsearch、Milvus、OSS"},
-                {"分布式与稳定性", "RPC 调用、配置中心、异步消息、重试补偿、幂等控制、链路日志、异常处理、服务解耦"},
-                {"AI 相关", "语音识别、语义理解、多模态模型、向量检索、RAG、Agent、多模型接入"},
-                {"AI 工具", "Claude Opus 4.8、Codex、Cursor、GPT-5.6 sol"},
-        };
         int order = 0;
-        for (String[] skill : skills) {
+        for (String[] group : SKILL_GROUPS) {
             SkillProfile entity = new SkillProfile();
             entity.setUserId(userId);
-            entity.setCategory(skill[0]);
-            entity.setSkillName(skill[1]);
+            entity.setSkillKey(group[0]);
+            entity.setSkillName(group[1]);
+            entity.setContent(group[2]);
+            entity.setCategory("专业技能");
             entity.setSortOrder(order++);
             skillRepository.save(entity);
         }
@@ -363,7 +451,7 @@ public class DemoDataInitializer implements CommandLineRunner {
 
     // ==================== 岗位模板 ====================
 
-    private void initTemplates(Long userId) {
+    private Map<String, ApplicationTemplate> initTemplates(Long userId) {
         String[][] templates = {
                 // name, audienceType, category, description, isDefault
                 {"大厂互联网版", "big_tech", "大厂", "适用：腾讯、字节、阿里、美团、京东、小红书等。优先内容：京东 AI 工程化、字节支付后端、系统性能优化、AI 协作经历。语言风格：技术复杂度、工程效率、性能优化、业务规模、快速迭代。", "true"},
@@ -371,6 +459,17 @@ public class DemoDataInitializer implements CommandLineRunner {
                 {"银行金融科技版", "bank", "银行", "适用：银行、券商、基金、信托、金融科技公司。优先内容：工行金融科技、字节国际支付、账户治理、资产安全、发布审计。语言风格：风险控制、系统稳定、数据一致性、流程规范、审计留痕。", "false"},
                 {"通用后端开发版", "general_backend", "通用", "适用：普通后端开发岗位。优先内容：Java、Go、Spring Boot、Redis、MySQL、gRPC、MQ、项目落地。语言风格：技术栈清晰、职责明确、结果可量化。", "false"},
         };
+        Map<String, ApplicationTemplate> result = new LinkedHashMap<>();
+        Map<String, String> skillOrders = Map.of(
+                "big_tech", SKILL_ORDER_BIG_TECH,
+                "state_owned", SKILL_ORDER_STATE_OWNED,
+                "bank", SKILL_ORDER_BANK,
+                "general_backend", SKILL_ORDER_GENERAL_BACKEND);
+        Map<String, String> skillKeywordMap = Map.of(
+                "big_tech", "Java / Go / Spring Boot / Kitex / gRPC / MQ / Redis / 微服务 / 分布式 / 幂等控制 / RAG / Agent / 多模型路由 / 性能优化",
+                "state_owned", "Java / Go / Spring Boot / MySQL / Redis / 异步消息 / 持续交付 / 自动投验 / 任务审计 / 智能系统 / Cloud VLM / Robot AIUI",
+                "bank", "Java / Spring Boot / MySQL / Redis / MQ / TCC / 幂等控制 / 重试补偿 / 风险控制 / 审计留痕 / 系统稳定 / 数据一致性",
+                "general_backend", "Java / Go / Spring Boot / MyBatis-Plus / Redis / MySQL / gRPC / MQ / Elasticsearch / DevOps");
         for (String[] t : templates) {
             ApplicationTemplate entity = new ApplicationTemplate();
             entity.setUserId(userId);
@@ -382,9 +481,176 @@ public class DemoDataInitializer implements CommandLineRunner {
             entity.setSelfEvaluation(SELF_EVALUATION);
             entity.setCareerPlan(CAREER_PLAN);
             entity.setAiCollaboration(AI_COLLABORATION);
-            entity.setSkillKeywords("Java / Go / Spring Boot / Redis / MySQL / gRPC / MQ / Kubernetes / RAG / Agent");
-            templateRepository.save(entity);
+            entity.setSkillKeywords(skillKeywordMap.get(t[1]));
+            entity.setSkillOrder(skillOrders.get(t[1]));
+            result.put(t[1], templateRepository.save(entity));
         }
+        return result;
+    }
+
+    /**
+     * 专业技能内容版本：sourceType=skill、sourceId=0，受众按模板归一化（general_backend→general）。
+     * skill_full 按模板技能排序拼接七分组；skill_short 保存各模板简短版并派生字数档位；
+     * skill_keywords 取模板技能关键词。
+     */
+    private void initSkillVariants(Long userId, Map<String, ApplicationTemplate> templates) {
+        Map<String, String> shortByAudience = Map.of(
+                "big_tech", SKILL_SHORT_BIG_TECH,
+                "state_owned", SKILL_SHORT_STATE_OWNED,
+                "bank", SKILL_SHORT_BANK,
+                "general", SKILL_SHORT_GENERAL);
+        for (ApplicationTemplate template : templates.values()) {
+            String audience = "general_backend".equals(template.getAudienceType())
+                    ? "general" : template.getAudienceType();
+            List<String> order = parseSkillOrder(template.getSkillOrder());
+            String full = composeSkillFull(order);
+            saveVariant(userId, "skill", 0L, audience, "general", "skill_full", "full", full);
+            saveVariant(userId, "skill", 0L, audience, "general", "skill_full", "within_500", truncate(full, 500));
+            saveVariant(userId, "skill", 0L, audience, "general", "skill_full", "within_300", truncate(full, 300));
+
+            String shortText = shortByAudience.getOrDefault(audience, truncate(full, 300));
+            saveVariant(userId, "skill", 0L, audience, "general", "skill_short", "full", shortText);
+            saveVariant(userId, "skill", 0L, audience, "general", "skill_short", "within_500", truncate(shortText, 500));
+            saveVariant(userId, "skill", 0L, audience, "general", "skill_short", "within_300", truncate(shortText, 300));
+            saveVariant(userId, "skill", 0L, audience, "general", "skill_short", "within_200", truncate(shortText, 200));
+            saveVariant(userId, "skill", 0L, audience, "general", "skill_short", "within_100", truncate(shortText, 100));
+
+            saveVariant(userId, "skill", 0L, audience, "general", "skill_keywords", "within_200",
+                    truncate(nz(template.getSkillKeywords()), 200));
+        }
+    }
+
+    /** 按模板技能排序拼接完整专业技能：1、分组标题：内容 */
+    private String composeSkillFull(List<String> order) {
+        Map<String, String[]> byKey = new LinkedHashMap<>();
+        for (String[] group : SKILL_GROUPS) {
+            byKey.put(group[0], group);
+        }
+        StringBuilder sb = new StringBuilder();
+        int index = 1;
+        for (String key : order) {
+            String[] group = byKey.get(key);
+            if (group == null) {
+                continue;
+            }
+            sb.append(index++).append("、").append(group[1]).append("：").append(group[2]).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    private List<String> parseSkillOrder(String skillOrder) {
+        List<String> result = new ArrayList<>();
+        if (skillOrder != null && !skillOrder.isBlank()) {
+            for (String key : skillOrder.split(",")) {
+                if (!key.isBlank() && !result.contains(key.trim())) {
+                    result.add(key.trim());
+                }
+            }
+        }
+        for (String[] group : SKILL_GROUPS) {
+            if (!result.contains(group[0])) {
+                result.add(group[0]);
+            }
+        }
+        return result;
+    }
+
+    // ==================== 模板-经历关系配置 ====================
+
+    /**
+     * 初始化各模板下的经历展示与自动填充配置：
+     * 大厂版默认只展示字节/京东（工行经历与 DevOps 项目保留数据但默认不展示、不自动填充，可手动选择）；
+     * 国央企/银行/通用版三段实习全部参与，仅优先级与侧重点不同。
+     */
+    private void initTemplateConfigs(Long userId, Map<String, ApplicationTemplate> templates,
+                                   List<InternshipExperience> internships, List<ProjectExperience> projects) {
+        InternshipExperience icbc = internships.get(0);
+        InternshipExperience bytedance = internships.get(1);
+        InternshipExperience jd = internships.get(2);
+        // 项目顺序：0 DevOps 1 TikTok 2 BNPL 3 IoT 4 VLM 5 AIUI
+        Long devOps = projects.get(0).getId();
+        Long tiktok = projects.get(1).getId();
+        Long bnpl = projects.get(2).getId();
+        Long iot = projects.get(3).getId();
+        Long vlm = projects.get(4).getId();
+        Long aiui = projects.get(5).getId();
+
+        // ---- 大厂互联网版：字节 > 京东；工行实习与 DevOps 项目不展示、不自动填充，仅保留可手选 ----
+        Long bigTech = templates.get("big_tech").getId();
+        saveConfig(userId, bigTech, "internship", bytedance.getId(), true, true, 1,
+                "支付后端,分布式,性能优化", 1);
+        saveConfig(userId, bigTech, "internship", jd.getId(), true, true, 2,
+                "AI工程化,智能云平台,多模态", 2);
+        saveConfig(userId, bigTech, "internship", icbc.getId(), false, false, 99,
+                "金融科技（数据保留，默认不展示，可手动选择）", 3);
+        saveConfig(userId, bigTech, "project", tiktok, true, true, 1, "账户治理,资产安全,P2P转账", 1);
+        saveConfig(userId, bigTech, "project", bnpl, true, true, 2, "多场景开户,流程编排", 2);
+        saveConfig(userId, bigTech, "project", iot, true, true, 3, "物联网,设备管理", 3);
+        saveConfig(userId, bigTech, "project", vlm, true, true, 4, "视觉语言模型,多模态", 4);
+        saveConfig(userId, bigTech, "project", aiui, true, true, 5, "智能对话,RAG,Agent", 5);
+        saveConfig(userId, bigTech, "project", devOps, false, false, 99,
+                "持续交付（数据保留，默认不展示，可手动选择）", 6);
+
+        // ---- 国央企版：三段实习全部保留，工行 > 京东 > 字节 ----
+        Long stateOwned = templates.get("state_owned").getId();
+        saveConfig(userId, stateOwned, "internship", icbc.getId(), true, true, 1,
+                "流程标准化,自动化,可审计,可追溯,跨系统协同", 1);
+        saveConfig(userId, stateOwned, "internship", jd.getId(), true, true, 2,
+                "智能系统,平台建设,工程落地,系统稳定性", 2);
+        saveConfig(userId, stateOwned, "internship", bytedance.getId(), true, true, 3,
+                "复杂业务治理,规则配置,异常处理一致性,系统可靠性", 3);
+        saveConfig(userId, stateOwned, "project", devOps, true, true, 1,
+                "流程标准化,可追溯,自动投验,跨集群迁移,系统协同", 1);
+        saveConfig(userId, stateOwned, "project", tiktok, true, true, 2, "账户治理,一致性建设", 2);
+        saveConfig(userId, stateOwned, "project", bnpl, true, true, 3, "流程编排,跨请求恢复", 3);
+        saveConfig(userId, stateOwned, "project", iot, true, true, 4, "设备管理,数据标准化", 4);
+        saveConfig(userId, stateOwned, "project", vlm, true, true, 5, "视觉处理,接口规范", 5);
+        saveConfig(userId, stateOwned, "project", aiui, true, true, 6, "智能交互,多模块协同", 6);
+
+        // ---- 银行金融科技版：三段实习全部保留，工行 > 字节 > 京东 ----
+        Long bank = templates.get("bank").getId();
+        saveConfig(userId, bank, "internship", icbc.getId(), true, true, 1,
+                "金融科技,持续交付,生产变更安全,自动投验,审计留痕", 1);
+        saveConfig(userId, bank, "internship", bytedance.getId(), true, true, 2,
+                "支付账户治理,资产安全,风险拦截,账户状态校验", 2);
+        saveConfig(userId, bank, "internship", jd.getId(), true, true, 3,
+                "后端工程,智能系统,接口稳定性", 3);
+        saveConfig(userId, bank, "project", devOps, true, true, 1,
+                "发布可靠性,生产变更安全,审计留痕", 1);
+        saveConfig(userId, bank, "project", tiktok, true, true, 2, "账户治理,资产安全,风险控制", 2);
+        saveConfig(userId, bank, "project", bnpl, true, true, 3, "开户注册,流程一致性", 3);
+        saveConfig(userId, bank, "project", iot, true, true, 4, "设备接入,数据订阅", 4);
+        saveConfig(userId, bank, "project", vlm, true, true, 5, "视觉处理,链路稳定", 5);
+        saveConfig(userId, bank, "project", aiui, true, true, 6, "智能系统,高并发对话", 6);
+
+        // ---- 通用后端开发版：三段实习全部保留，字节 > 京东 > 工行 ----
+        Long generalBackend = templates.get("general_backend").getId();
+        String generalTags = "Java,Go,Spring Boot,Redis,MySQL,gRPC,MQ,分布式";
+        saveConfig(userId, generalBackend, "internship", bytedance.getId(), true, true, 1, generalTags, 1);
+        saveConfig(userId, generalBackend, "internship", jd.getId(), true, true, 2, generalTags, 2);
+        saveConfig(userId, generalBackend, "internship", icbc.getId(), true, true, 3, generalTags, 3);
+        saveConfig(userId, generalBackend, "project", devOps, true, true, 1, generalTags, 1);
+        saveConfig(userId, generalBackend, "project", tiktok, true, true, 2, generalTags, 2);
+        saveConfig(userId, generalBackend, "project", bnpl, true, true, 3, generalTags, 3);
+        saveConfig(userId, generalBackend, "project", iot, true, true, 4, generalTags, 4);
+        saveConfig(userId, generalBackend, "project", vlm, true, true, 5, generalTags, 5);
+        saveConfig(userId, generalBackend, "project", aiui, true, true, 6, generalTags, 6);
+    }
+
+    private void saveConfig(Long userId, Long templateId, String sourceType, Long sourceId,
+                            boolean included, boolean autoFill, int priority, String tags, int order) {
+        TemplateExperienceConfig config = new TemplateExperienceConfig();
+        config.setUserId(userId);
+        config.setTemplateId(templateId);
+        config.setSourceType(sourceType);
+        config.setSourceId(sourceId);
+        config.setIncludedInResume(included);
+        config.setAutoFillEnabled(autoFill);
+        config.setAutoFillPriority(priority);
+        config.setManualSelectable(true);
+        config.setEmphasisTags(tags);
+        config.setDisplayOrder(order);
+        templateConfigRepository.save(config);
     }
 
     // ==================== 开放题素材 ====================
@@ -545,6 +811,18 @@ public class DemoDataInitializer implements CommandLineRunner {
                 WHY_POSITION, List.of("为什么选择该岗位", "岗位理解", "应聘原因"),
                 ref(materials.get("WHY_POSITION"))));
 
+        // ---- 专业技能（非敏感，供插件自动填写；字段名命中技能关键词时优先走技能版本匹配） ----
+        for (String[] group : SKILL_GROUPS) {
+            fields.add(field(userId, group[0], group[1], "textarea", "专业技能", group[2],
+                    SKILL_MATCH_KEYWORDS, null));
+        }
+        fields.add(field(userId, "skill_full", "专业技能（完整版）", "textarea", "专业技能",
+                composeSkillFull(parseSkillOrder(SKILL_ORDER_BIG_TECH)), SKILL_MATCH_KEYWORDS, null));
+        fields.add(field(userId, "skill_short", "专业技能（简短版）", "textarea", "专业技能",
+                SKILL_SHORT_BIG_TECH, SKILL_MATCH_KEYWORDS, null));
+        fields.add(field(userId, "skill_keywords", "技能关键词", "input", "专业技能",
+                "Java / Go / Spring Boot / Redis / MySQL / gRPC / MQ / RAG / Agent", SKILL_MATCH_KEYWORDS, null));
+
         for (UserCustomField f : fields) {
             f.setSortOrder(order++);
             customFieldRepository.save(f);
@@ -577,87 +855,105 @@ public class DemoDataInitializer implements CommandLineRunner {
 
     // ==================== 内容版本生成 ====================
 
-    private static final List<String> AUDIENCES = List.of("general", "big_tech", "state_owned", "bank");
     private static final List<String> LENGTHS = List.of("within_200", "within_300", "within_500", "within_1000");
 
     private void initVariants(Long userId,
                               List<InternshipExperience> internships,
                               List<ProjectExperience> projects,
                               Map<String, AnswerMaterial> materials) {
-        // 实习经历 3 × 16 版本
+        // 实习经历：按 场景风格 × 岗位方向 × 字段类型 × 字数 生成内容版本（大厂版不含工行）
         for (InternshipExperience internship : internships) {
-            for (String audience : AUDIENCES) {
-                String full = composeInternship(audience, internship);
-                for (String length : LENGTHS) {
-                    saveVariant(userId, "internship", internship.getId(), audience, length, truncate(full, limitOf(length)));
-                }
+            InternshipTpl tpl = INTERN_TPL.get(nz(internship.getCompany()));
+            if (tpl == null) {
+                log.warn("实习「{}」无预置内容模板，跳过版本生成", internship.getCompany());
+                continue;
             }
+            saveInternVariants(userId, internship, tpl);
         }
-        // 项目经历 6 × 16 版本
+        // 项目经历：每个受众生成 描述/职责/成果/技术栈 四类字段版本（全部受众全量生成，不做排除）
         for (ProjectExperience project : projects) {
-            for (String audience : AUDIENCES) {
-                String full = composeProject(audience, project);
+            for (String audience : AUDIENCES_ALL) {
+                saveVariant(userId, "project", project.getId(), audience, "general", "project_overview",
+                        "within_300", truncate(nz(project.getProjectIntro()), 300));
+                saveVariant(userId, "project", project.getId(), audience, "general", "project_responsibility",
+                        "within_500", truncate(nz(project.getResponsibilities()), 500));
+                saveVariant(userId, "project", project.getId(), audience, "general", "project_result",
+                        "within_200", truncate(nz(project.getResult()), 200));
+                saveVariant(userId, "project", project.getId(), audience, "general", "project_tech_stack",
+                        "within_200", truncate(nz(project.getTechStack()), 200));
                 for (String length : LENGTHS) {
-                    saveVariant(userId, "project", project.getId(), audience, length, truncate(full, limitOf(length)));
+                    String full = nz(project.getProjectIntro()) + "\n主要职责：\n" + nz(project.getResponsibilities())
+                            + "\n项目成果：" + nz(project.getResult());
+                    saveVariant(userId, "project", project.getId(), audience, "general", "project_combined",
+                            length, truncate(full, limitOf(length)));
                 }
             }
         }
-        // 开放题素材 4 受众 × 4 长度版本
+        // 开放题素材：通用方向合并型字段，四个长度档位（超长自动按句截断）
         for (AnswerMaterial material : materials.values()) {
-            for (String audience : AUDIENCES) {
-                String full = audiencePrefix(audience) + material.getContent();
-                for (String length : LENGTHS) {
-                    saveVariant(userId, "material", material.getId(), audience, length, truncate(full, limitOf(length)));
-                }
+            for (String length : LENGTHS) {
+                saveVariant(userId, "material", material.getId(), "general", "general", "combined",
+                        length, truncate(nz(material.getContent()), limitOf(length)));
             }
         }
     }
 
-    private void saveVariant(Long userId, String sourceType, Long sourceId, String audience, String length, String content) {
+    private void saveVariant(Long userId, String sourceType, Long sourceId, String audience,
+                             String direction, String fieldType, String length, String content) {
         ContentVariant variant = new ContentVariant();
         variant.setUserId(userId);
         variant.setSourceType(sourceType);
         variant.setSourceId(sourceId);
         variant.setAudienceType(audience);
+        variant.setJobDirection(direction);
+        variant.setFieldType(fieldType);
         variant.setLengthType(length);
         variant.setContent(content);
         variant.setEnabled(true);
         contentVariantRepository.save(variant);
     }
 
-    /** 实习内容按受众组合：大厂突出技术栈与复杂度，国央企/银行先讲成果与可靠性 */
-    private String composeInternship(String audience, InternshipExperience internship) {
-        String intro = nz(internship.getDescription());
-        String highlight = nz(internship.getHighlights());
-        String tech = hasText(internship.getTechStack()) ? "技术栈：" + internship.getTechStack() + "。" : "";
-        return switch (audience) {
-            case "state_owned" -> PREFIX_STATE_OWNED + intro + highlight + tech;
-            case "bank" -> PREFIX_BANK + intro + highlight + tech;
-            case "big_tech" -> intro + tech + highlight;
-            default -> intro + highlight;
-        };
+    /** 为一段实习生成各受众 × 字段类型 × 字数的内容版本 */
+    private void saveInternVariants(Long userId, InternshipExperience internship, InternshipTpl tpl) {
+        Long id = internship.getId();
+        // 200 字档：合并/职责/成果/技术栈 四类字段，各受众共用（字数优先）
+        for (String audience : tpl.audiences) {
+            saveVariant(userId, "internship", id, audience, "general", "internship_combined", "within_200", tpl.comb200);
+            saveVariant(userId, "internship", id, audience, "general", "internship_responsibility", "within_200", tpl.resp200);
+            saveVariant(userId, "internship", id, audience, "general", "internship_result", "within_200", tpl.res200);
+            saveVariant(userId, "internship", id, audience, "general", "internship_tech_stack", "within_200",
+                    truncate(nz(internship.getTechStack()), 200));
+        }
+        // 300/500/1000 字档：按受众 × 岗位方向（backend / ai）生成，未提供原文的格子回退合成或截断兜底（绝不超限）
+        for (String audience : tpl.audiences) {
+            for (String direction : List.of("backend", "ai")) {
+                saveVariant(userId, "internship", id, audience, direction, "internship_overview", "within_300",
+                        truncate(firstNonBlank(tpl.ov300, tpl.comb200), 300));
+                String comb500 = firstNonBlank(tpl.comb500ByAudience(audience),
+                        compose500(tpl.ov300ByAudience(audience), tpl.resp200, tpl.res200));
+                saveVariant(userId, "internship", id, audience, direction, "internship_combined", "within_500",
+                        truncate(comb500, 500));
+                saveVariant(userId, "internship", id, audience, direction, "internship_combined", "within_1000",
+                        truncate(firstNonBlank(tpl.comb1000ByAudience(audience), comb500), 1000));
+            }
+        }
     }
 
-    /** 项目内容按受众组合 */
-    private String composeProject(String audience, ProjectExperience project) {
-        String intro = nz(project.getProjectIntro());
-        String responsibilities = nz(project.getResponsibilities());
-        String result = nz(project.getResult());
-        String tech = hasText(project.getTechStack()) ? "技术栈：" + project.getTechStack() + "。" : "";
-        return switch (audience) {
-            case "state_owned" -> PREFIX_STATE_OWNED + intro + result + "主要职责：" + responsibilities;
-            case "bank" -> PREFIX_BANK + intro + result + "主要职责：" + responsibilities;
-            case "big_tech" -> intro + tech + "主要职责：" + responsibilities + result;
-            default -> intro + "主要职责：" + responsibilities + result;
-        };
+    /** 500 字合成：300 字描述 + 分条职责 + 成果 */
+    private String compose500(String ov300, String resp200, String res200) {
+        if (!hasText(ov300)) {
+            return resp200 + "\n" + res200;
+        }
+        return ov300 + "\n主要职责包括：\n" + resp200 + "\n" + res200;
     }
 
-    private String audiencePrefix(String audience) {
-        return switch (audience) {
-            case "state_owned" -> PREFIX_STATE_OWNED;
-            case "bank" -> PREFIX_BANK;
-            default -> "";
-        };
+    private String firstNonBlank(String... values) {
+        for (String v : values) {
+            if (hasText(v)) {
+                return v;
+            }
+        }
+        return "";
     }
 
     private int limitOf(String lengthType) {
@@ -700,4 +996,198 @@ public class DemoDataInitializer implements CommandLineRunner {
     private boolean hasText(String value) {
         return value != null && !value.trim().isEmpty();
     }
+
+    // ==================== 实习内容模板（场景风格 × 岗位方向 × 字数） ====================
+    // 三段实习均生成全部受众的内容版本（含工行 big_tech 版本）；版本保留供手动选择，
+    // 是否默认展示/自动填充由 template_experience_config 配置表决定。
+
+    private static final List<String> AUDIENCES_ALL = List.of("big_tech", "state_owned", "bank", "general");
+
+    /** 实习内容模板：按受众组合提供不同场景风格的原文 */
+    private record InternshipTpl(List<String> audiences, String comb200, String resp200, String res200,
+                                 String ov300, String ov300Bank, String ov300State, String ov300BigTech,
+                                 String comb500Bank, String comb500BigTech, String comb500State,
+                                 String comb1000Bank, String comb1000BigTech) {
+        String ov300ByAudience(String a) {
+            return switch (a) {
+                case "bank" -> firstOf(ov300Bank, ov300);
+                case "state_owned" -> firstOf(ov300State, ov300);
+                case "big_tech" -> firstOf(ov300BigTech, ov300);
+                default -> ov300;
+            };
+        }
+
+        String comb500ByAudience(String a) {
+            return switch (a) {
+                case "bank" -> firstOf(comb500Bank, comb500BigTech, comb500State);
+                case "big_tech" -> firstOf(comb500BigTech, comb500Bank, comb500State);
+                case "state_owned" -> firstOf(comb500State, comb500Bank, comb500BigTech);
+                default -> firstOf(comb500BigTech, comb500Bank, comb500State);
+            };
+        }
+
+        String comb1000ByAudience(String a) {
+            return switch (a) {
+                case "bank" -> comb1000Bank;
+                case "big_tech" -> firstOf(comb1000BigTech, comb1000Bank);
+                default -> null;
+            };
+        }
+
+        private static String firstOf(String... vs) {
+            for (String v : vs) {
+                if (v != null && !v.isBlank()) {
+                    return v;
+                }
+            }
+            return null;
+        }
+    }
+
+    // ---------- 工行（全部受众；大厂版版本保留供手动选择，默认不展示/不自动填充） ----------
+    private static final String ICBC_COMB200 = """
+            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台研发，围绕持续交付、精准出版、自动投验、生产发布和跨集群迁移等场景，基于 Java、Spring Boot、JPA、Redis 等技术完成后端建模、接口设计、基础设施客户端封装和任务可靠性建设，推动交付流程标准化、自动化与可追溯。""";
+    private static final String ICBC_RESP200 = """
+            1、参与企业级 DevOps 一体化交付平台后端研发；
+            2、完成项目、集群、构建发布、部署任务及操作审计等领域建模；
+            3、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施能力；
+            4、参与持续交付、自动投验、跨集群迁移和失败恢复链路建设。""";
+    private static final String ICBC_RES200 = """
+            形成统一的一体化交付入口，通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制，减少多平台切换与人工操作成本，提升发布任务可靠性、可追溯性和生产变更安全性。""";
+    private static final String ICBC_OV300_BANK = """
+            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台研发，面向应用构建、生产发布、精准出版、自动投验、环境路由切换和存量系统跨集群批量迁移等场景，推动交付流程标准化、自动化与可追溯。工作中基于 Java、Spring Boot、JPA、Redis 等技术完成项目、集群、构建发布、部署任务及操作审计等领域建模与接口设计，封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施客户端，并通过异步任务持久化、发布互斥、熔断、失败恢复和审计留痕机制提升发布可靠性。""";
+    private static final String ICBC_OV300_STATE = """
+            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台建设，围绕持续交付、精准出版、自动投验、生产发布、跨集群迁移和任务审计等场景，推进应用交付流程规范化、自动化和可追溯。项目基于 Java、Spring Boot、JPA、Redis、Vue3 等技术实现，工作中参与后端领域建模、RESTful API 设计、基础设施客户端封装、权限控制、统一异常处理和操作审计建设，提升跨系统协同、发布任务恢复和生产变更过程管控能力。""";
+    private static final String ICBC_OV300_GENERAL = """
+            参与企业级 DevOps 一体化交付平台研发，面向应用构建、镜像构建、模板部署、滚动升级、自动投验和跨集群迁移等场景，建设统一交付入口。基于 Java、Spring Boot、JPA、Redis 完成核心领域建模、接口设计和任务状态流转，封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施能力，并通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制提升长任务执行稳定性与系统可维护性。""";
+    private static final String ICBC_COMB500_BANK = """
+            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台研发，面向应用构建、生产发布、精准出版、自动投验、环境路由切换和存量系统跨集群批量迁移等场景，推动交付流程标准化、自动化与可追溯。项目技术栈包括 Java、Spring Boot、JPA、Redis、Vue3、TypeScript、PaaS、Harbor、Apollo、ETCD、HAProxy 等。
+            主要职责包括：
+            1、完成项目、集群、构建发布、部署任务及操作审计等领域建模与 RESTful API 设计；
+            2、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施客户端及鉴权机制；
+            3、参与自动化持续交付链路建设，覆盖 Maven 打包、制品封装、镜像构建、模板创建、滚动升级、应用启停和版本回滚；
+            4、参与精准出版、自动投验和跨集群迁移能力建设。
+            项目通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制，提升发布任务可靠性、生产变更安全性和审计可追溯性。""";
+    private static final String ICBC_COMB1000_BANK = """
+            在中国工商银行北京市分行移动金融建设部实习期间，参与企业级 DevOps 一体化交付平台研发。平台面向应用构建、生产发布、精准出版、自动投验、环境路由切换和存量系统跨集群批量迁移等场景，为研发团队提供统一的持续交付入口，推动交付流程标准化、自动化与可追溯。项目技术栈包括 Java、Spring Boot、JPA、Redis、Vue3、TypeScript、Vite、PaaS、Harbor、Apollo、ETCD、HAProxy 等。
+            主要职责包括：
+            1、完成项目、集群、构建发布、部署任务及操作审计等领域建模与 RESTful API 设计，支撑平台核心业务流程运转；
+            2、封装 PaaS、Harbor、Apollo、ETCD、HAProxy 等基础设施客户端及鉴权机制，屏蔽底层平台差异；
+            3、参与自动化持续交付链路建设，覆盖 Maven 打包、制品封装、镜像构建、模板创建、滚动升级、应用启停和版本回滚；
+            4、参与精准出版、自动投验和跨集群迁移能力建设，支持资源选择、环境参数映射、配置转换、网络预检与健康检查。
+            项目通过异步任务持久化、Redis 发布互斥、熔断、失败恢复和操作审计机制，提升长任务执行稳定性、发布任务可靠性、生产变更安全性和审计可追溯性，减少多平台切换与人工操作成本，推动交付流程标准化、自动化与可追溯。""";
+    private static final InternshipTpl ICBC_TPL = new InternshipTpl(
+            AUDIENCES_ALL,
+            ICBC_COMB200, ICBC_RESP200, ICBC_RES200,
+            ICBC_OV300_GENERAL, ICBC_OV300_BANK, ICBC_OV300_STATE, ICBC_OV300_GENERAL,
+            ICBC_COMB500_BANK, null, null,
+            ICBC_COMB1000_BANK, null);
+
+    // ---------- 字节（大厂/银行/国央企/通用） ----------
+    private static final String BYTE_COMB200 = """
+            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发，围绕越南区 P2P Transfer、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截和资产安全校验等场景，建设账号侧状态校验、在途交易治理、TCC 配置化规则、Redis 流程状态缓存、MQ 异步补偿和幂等处理能力。""";
+    private static final String BYTE_RESP200 = """
+            1、参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发；
+            2、建设 P2P Transfer 账号侧状态校验和在途交易治理能力；
+            3、参与账户关闭预检查、KYC 引导、账户状态与交易方向匹配规则设计；
+            4、通过 TCC、Redis、MQ 和幂等机制提升账户链路稳定性。""";
+    private static final String BYTE_RES200 = """
+            沉淀统一的账户状态校验、在途交易治理和多场景开户注册能力，支撑 P2P 转账、账户关闭预检查、交易预检查、账户权限校验等多场景复用，提升账号侧链路稳定性、可维护性和异常场景处理一致性。""";
+    private static final String BYTE_OV300_BIGTECH = """
+            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发，围绕越南区 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截及资产安全校验等场景建设账号侧能力。工作中参与设计转账在途交易统一校验能力，聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等未完成订单；同时参与账户状态与交易方向匹配规则、TCC 配置化检查器、Redis 流程状态缓存、MQ 异步补偿和业务幂等处理建设，提升复杂支付账户链路的稳定性。""";
+    private static final String BYTE_OV300_BANK = """
+            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包账户体系后端研发，重点围绕 P2P Transfer 用户间转账、账户状态校验、KYC 引导、账户关闭/注销拦截、资产安全校验和历史交易补偿等金融支付场景开展工作。参与设计账号侧状态校验、在途交易统一校验和账户关闭预检查能力，并通过 TCC 配置化规则、Redis 缓存、MQ 消息通知和幂等处理机制，提升账户状态判断、风险拦截、交易放行和异常场景处理的一致性与可靠性。""";
+    private static final String BYTE_OV300_STATE = """
+            在字节跳动国际支付实习期间，参与钱包用户域账户治理能力建设，围绕 TikTok Pay / PIPO Wallet 的 P2P 转账、开户注册、账户状态治理、KYC 引导、账户关闭预检查和资产安全校验等场景，梳理多入口、多状态、多系统依赖下的账号侧判断逻辑。通过配置化规则、统一校验能力、消息通知和幂等处理机制，减少重复开发和异常处理不一致问题，提升账户操作链路的规范性、稳定性和可维护性。""";
+    private static final String BYTE_COMB500_BIGTECH = """
+            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发，面向越南区 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截及资产安全校验等场景建设账号侧能力，技术栈包括 Go、Kitex、Thrift IDL、Redis、MySQL、TCC、MQ、RPC。
+            主要职责包括：
+            1、参与 P2P Transfer 账号侧状态校验能力建设，梳理付款方/收款方在未开通、KYC 中间态、WalletUid 冻结、资金账户异常、转账过期等分支下的状态路由；
+            2、设计并实现转账在途交易统一校验能力，聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等未完成订单；
+            3、参与账户状态与交易方向匹配规则设计，按出金/入金方向判断账户可操作性；
+            4、参与 BNPL / TTS 多场景开户注册流程编排，结合 Redis 流程状态缓存、MQ 异步补偿和 KYC 回调乱序处理提升流程恢复能力。
+            通过上述工作，沉淀了账户状态校验、交易治理和多场景开户注册能力，提升账号侧链路稳定性和异常处理一致性。""";
+    private static final String BYTE_COMB500_BANK = """
+            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包账户体系后端研发，围绕 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截、资产安全校验和历史交易补偿等场景开展工作，技术栈包括 Go、Kitex、Thrift IDL、Redis、MySQL、TCC、MQ、RPC。
+            主要职责包括：
+            1、参与设计账号侧状态校验能力，覆盖未开通、KYC 中间态、WalletUid 冻结、资金账户异常、转账过期等分支；
+            2、建设转账在途交易统一校验能力，识别待收款、处理中、退款中等未完成订单，并接入账户关闭预检查；
+            3、参与账户状态与交易方向匹配规则设计，区分出金和入金方向下的可操作性；
+            4、通过 TCC 配置化规则、Redis 缓存、MQ 通知和业务幂等机制，提升风险拦截、交易放行和异常处理的一致性。
+            项目沉淀了账户状态校验、交易预检查、账户权限校验等多场景复用能力，提升支付账户链路稳定性、资金安全和可维护性。""";
+    private static final String BYTE_COMB1000_BANK = """
+            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包账户体系后端研发，围绕越南区 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截、资产安全校验和历史交易补偿等金融支付场景开展工作，技术栈包括 Go、Kitex、Thrift IDL、Redis、MySQL、TCC、MQ、RPC。
+            主要职责包括：
+            1、参与设计账号侧状态校验能力，覆盖未开通、KYC 中间态、WalletUid 冻结、资金账户异常、转账过期等分支，保障账户操作风险可控；
+            2、建设转账在途交易统一校验能力，聚合交易系统与钱包产品数据源，识别待收款、处理中、退款中等未完成订单，并接入账户关闭预检查，命中风险项后返回拦截原因与引导信息；
+            3、参与账户状态与交易方向匹配规则设计，区分出金和入金方向下的账户可操作性，提升账户状态判断与交易放行的一致性；
+            4、参与 BNPL / TTS 多场景开户注册流程编排，通过 TCC 配置化规则、Redis 流程状态缓存、MQ 消息通知和业务幂等机制，提升流程恢复能力与异常场景处理一致性。
+            项目沉淀了账户状态校验、交易预检查、账户权限校验等多场景复用能力，提升支付账户链路稳定性、资金安全性和可维护性，支撑支付账户治理场景持续扩展。""";
+    private static final String BYTE_COMB1000_BIGTECH = """
+            在字节跳动国际支付实习期间，参与 TikTok Pay / PIPO Wallet 钱包用户域后端研发，面向越南区 P2P Transfer 用户间转账、多场景开户注册、账户状态治理、KYC 引导、账户关闭/注销拦截及资产安全校验等场景建设账号侧能力，技术栈包括 Go、Kitex、Thrift IDL、Redis、MySQL、TCC、MQ、RPC。
+            主要职责包括：
+            1、参与 P2P Transfer 账号侧状态校验能力建设，梳理付款方/收款方在未开通、KYC 中间态、WalletUid 冻结、资金账户异常、转账过期等分支下的状态路由；
+            2、设计并实现转账在途交易统一校验能力，聚合交易系统与钱包产品 SDK 数据源，识别待收款、处理中、退款中等未完成订单，并接入账户关闭预检查；
+            3、参与账户状态与交易方向匹配规则设计，按出金/入金方向判断账户可操作性；
+            4、参与 BNPL / TTS 多场景开户注册流程编排，采用同步编排 + 异步重试模型，结合 Redis 流程状态缓存、MQ 异步补偿和 KYC 回调乱序处理提升流程恢复能力。
+            通过上述工作，沉淀了账户状态校验、在途交易治理和多场景开户注册能力，支撑 P2P 转账、账户关闭预检查、交易预检查、账户权限校验等多场景复用，提升账号侧链路稳定性、可维护性和异常处理一致性。""";
+    private static final InternshipTpl BYTE_TPL = new InternshipTpl(
+            List.of("big_tech", "bank", "state_owned", "general"),
+            BYTE_COMB200, BYTE_RESP200, BYTE_RES200,
+            null, BYTE_OV300_BANK, BYTE_OV300_STATE, BYTE_OV300_BIGTECH,
+            BYTE_COMB500_BANK, BYTE_COMB500_BIGTECH, null,
+            BYTE_COMB1000_BANK, BYTE_COMB1000_BIGTECH);
+
+    // ---------- 京东（大厂/国央企/银行/通用，AI 方向重点） ----------
+    private static final String JD_COMB200 = """
+            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力，参与 gRPC/proto 通信、策略模式、JSON Schema 校验、流式响应、RAG、Agent、熔断降级和 Kubernetes 部署等工作。""";
+    private static final String JD_RESP200 = """
+            1、参与机器人智能云平台后端研发；
+            2、参与 Cloud IoT 设备管理、数据订阅和消息推送能力建设；
+            3、参与 Cloud VLM 多模态视觉处理服务和 gRPC/proto 协议设计；
+            4、参与 Robot AIUI 对话工作流、RAG、Agent、多模型路由和容器化部署。""";
+    private static final String JD_RES200 = """
+            支撑机器人配件与智能设备生态的云端服务化接入，支持多类视觉处理和智能对话场景；通过异步处理、流式响应和链路优化，提升接口响应与系统吞吐能力，核心接口响应耗时降低 30%+，吞吐量提升 50%。""";
+    private static final String JD_OV300_BIGTECH_AI = """
+            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力。工作中参与 Cloud VLM 视觉语言模型服务建设，基于策略模式设计图像处理框架，结合规则引擎和配置中心实现模型与插件动态路由；同时参与 Robot AIUI 智能对话系统建设，基于 Go、Gin、gRPC 支持音频流接入、上下文透传、RAG 语义检索、Agent 插件化管理、多模型路由、降级熔断和 Kubernetes 容器化部署。""";
+    private static final String JD_OV300_BIGTECH_BACKEND = """
+            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，基于 Java / Spring Boot 和 Go 构建 Cloud IoT、Cloud VLM、Robot AIUI 等模块能力。工作中参与设备全生命周期管理、gRPC/proto 多端通信、JSON Schema 校验、多级重试、异步处理、流式响应、链路追踪和 Kubernetes 容器化部署；同时围绕视觉推理链路和智能对话链路进行性能优化，支撑云端、设备端及第三方服务之间的稳定交互。""";
+    private static final String JD_OV300_STATE = """
+            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕物联网设备管理、多模态视觉处理和智能对话系统建设开展工作。项目覆盖 Cloud IoT、Cloud VLM、Robot AIUI 等模块，涉及设备接入、数据标准化、gRPC 通信、视觉语言模型服务、RAG 语义检索、Agent 插件化管理和多模型调度等能力。工作中注重接口规范、模块解耦、链路稳定性和系统工程化落地，支撑智能设备生态的云端服务化接入。""";
+    private static final String JD_COMB500_BIGTECH_AI = """
+            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力，技术栈包括 Java、Spring Boot、MyBatis-Plus、MySQL、Redis、gRPC、Elasticsearch、OSS、Go、Gin、Milvus、Docker、Kubernetes。
+            主要职责包括：
+            1、参与 Cloud IoT 物联网云服务建设，设计“品类-产品-设备”三层数据模型，实现设备 CRUD、绑定解绑、状态查询、批量操作和状态快照等能力；
+            2、参与 Cloud VLM 视觉语言模型服务建设，基于策略模式设计图像处理框架，结合规则引擎和配置中心实现模型与插件动态路由；
+            3、完成 gRPC 接口和 proto 协议设计，支撑云端、设备端高效通信；
+            4、参与 Robot AIUI 智能对话系统建设，支持音频流接入、状态管理、上下文透传、RAG 语义检索、Agent 插件化管理、多模型路由、降级熔断和链路追踪。
+            项目支撑多类视觉处理和智能对话场景，核心接口响应耗时降低 30%+，吞吐量提升 50%。""";
+    private static final String JD_COMB500_STATE = """
+            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力，支撑机器人配件与智能设备生态的云端服务化接入。
+            主要职责包括：
+            1、参与 Cloud IoT 物联网云服务建设，设计“品类-产品-设备”三层数据模型，实现设备全生命周期管理，并接入设备通信、鉴权认证、数据订阅和消息推送链路；
+            2、参与物模型与 Schema 规范设计，实现设备属性、事件、方法的数据标准化；
+            3、参与 Cloud VLM 视觉语言模型服务建设，基于策略模式、规则引擎和配置中心实现多场景视觉处理能力；
+            4、参与 Robot AIUI 智能对话系统建设，完成流式接口、上下文透传、RAG 语义检索、Agent 管理、多模型路由和 Kubernetes 容器化部署。
+            项目提升了智能系统服务化接入、接口规范化和多模块协同处理能力，支撑智能交互场景持续扩展。""";
+    private static final String JD_COMB1000_BIGTECH_AI = """
+            在京东科技应用及智能交互组实习期间，参与机器人智能云平台后端研发，围绕 Cloud IoT、Cloud VLM、Robot AIUI 等模块建设设备接入管理、多模态视觉处理、智能对话、语义检索和多模型调度能力，支撑机器人配件与智能设备生态的云端服务化接入，技术栈包括 Java、Spring Boot、MyBatis-Plus、MySQL、Redis、gRPC、Elasticsearch、OSS、Go、Gin、Milvus、Docker、Kubernetes。
+            主要职责包括：
+            1、参与 Cloud IoT 物联网云服务建设，设计“品类-产品-设备”三层数据模型，实现设备全生命周期管理、绑定解绑、状态查询、批量操作和状态快照，并接入设备通信、鉴权认证、数据订阅和消息推送链路；
+            2、参与物模型与 JSON Schema 规范设计，实现设备属性、事件、方法的数据标准化与多级重试；
+            3、参与 Cloud VLM 视觉语言模型服务建设，基于策略模式设计图像处理框架，结合规则引擎和配置中心实现模型与插件动态路由，支持图像识别、视觉问答等多场景落地；
+            4、完成 gRPC 接口和 proto 协议设计，支撑云端、设备端高效通信；
+            5、参与 Robot AIUI 智能对话系统建设，支持音频流接入、状态管理、上下文透传、RAG 语义检索、Agent 插件化管理、多模型路由、降级熔断和链路追踪。
+            项目支撑多类视觉处理和智能对话场景稳定运行，通过异步处理、流式响应和链路优化，核心接口响应耗时降低 30%+，吞吐量提升 50%。""";
+    private static final InternshipTpl JD_TPL = new InternshipTpl(
+            List.of("big_tech", "state_owned", "bank", "general"),
+            JD_COMB200, JD_RESP200, JD_RES200,
+            JD_OV300_BIGTECH_AI, null, JD_OV300_STATE, JD_OV300_BIGTECH_BACKEND,
+            null, JD_COMB500_BIGTECH_AI, JD_COMB500_STATE,
+            null, JD_COMB1000_BIGTECH_AI);
+
+    private static final Map<String, InternshipTpl> INTERN_TPL = Map.of(
+            "中国工商银行北京市分行", ICBC_TPL,
+            "字节跳动", BYTE_TPL,
+            "京东集团-京东科技", JD_TPL);
 }

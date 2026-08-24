@@ -13,6 +13,10 @@ public class AutofillMatchRequest {
     private Long templateId;
     /** 受众类型（可覆盖模板上的 audienceType）：big_tech / state_owned / bank / general_backend */
     private String audienceType;
+    /** 岗位方向：backend / ai / fintech，为空时按内置顺序回退 */
+    private String jobDirection;
+    /** 优先实习经历 id；为空时按模板+岗位方向自动推荐 */
+    private Long preferredInternshipId;
     private String pageUrl;
     private String pageTitle;
     private List<FieldInfo> fields;

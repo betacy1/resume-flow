@@ -47,4 +47,12 @@ public class InternshipExperience extends BaseEntity {
 
     @Column(name = "sort_order")
     private Integer sortOrder = 0;
+
+    /** 排除的受众场景（逗号分隔，如 big_tech），该场景下不会选用此实习 */
+    @Column(name = "audience_exclude", length = 100)
+    private String audienceExclude;
+
+    /** 模板优先级 JSON，如 {"bank":1,"state_owned":2}，数值越小越优先 */
+    @Column(name = "template_priority", length = 255)
+    private String templatePriority;
 }

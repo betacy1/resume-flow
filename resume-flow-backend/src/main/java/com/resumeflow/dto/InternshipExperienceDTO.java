@@ -20,4 +20,8 @@ public class InternshipExperienceDTO {
     private String shortName;
     private String description;
     private Integer sortOrder;
+    /** 排除的受众场景（逗号分隔，如 big_tech） */
+    private String audienceExclude;
+    /** 模板优先级 JSON，如 {"bank":1,"state_owned":2} */
+    private String templatePriority;
 }

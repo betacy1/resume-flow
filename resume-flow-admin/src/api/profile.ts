@@ -62,6 +62,10 @@ export interface InternshipExperienceDTO {
   shortName?: string;
   description?: string;
   sortOrder?: number;
+  /** 排除的场景模板（逗号分隔，如 big_tech） */
+  audienceExclude?: string;
+  /** 各场景模板下的优先级 JSON，如 {"bank":1,"state_owned":2}，数值越小越优先 */
+  templatePriority?: string;
 }
 
 export interface ProjectExperienceDTO {
@@ -78,6 +82,8 @@ export interface ProjectExperienceDTO {
   result?: string;
   techStack?: string;
   sortOrder?: number;
+  /** 排除的场景模板（逗号分隔，如 big_tech） */
+  audienceExclude?: string;
 }
 
 export interface SkillProfileDTO {

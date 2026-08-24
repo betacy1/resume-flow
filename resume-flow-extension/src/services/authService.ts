@@ -1,5 +1,6 @@
-import { login as apiLogin, getMe } from './apiClient';
+import { login as apiLogin } from './apiClient';
 import { saveAuth, clearAuth, getAuth, StoredAuth } from './storageService';
+import { clearSyncCache } from './syncCacheService';
 
 /**
  * 认证服务 - 处理登录/登出逻辑
@@ -24,9 +25,10 @@ export async function login(
   return { userId: result.userId, username: result.username };
 }
 
-/** 登出 */
+/** 登出（同时清除同步缓存） */
 export async function logout(): Promise<void> {
   await clearAuth();
+  await clearSyncCache();
 }
 
 /** 检查是否已登录 */

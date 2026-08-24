@@ -28,5 +28,7 @@ public interface UserCustomFieldRepository extends JpaRepository<UserCustomField
 
     List<UserCustomField> findByUserIdAndEnabledTrueAndDeletedFalseOrderBySortOrderAscIdAsc(Long userId);
 
+    List<UserCustomField> findByUserIdAndDeletedFalseOrderBySortOrderAscIdAsc(Long userId);
+
     void deleteByUserId(Long userId);
 }

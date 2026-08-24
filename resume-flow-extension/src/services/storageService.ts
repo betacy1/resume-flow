@@ -11,6 +11,9 @@ const STORAGE_KEYS = {
   SELECTED_TEMPLATE_NAME: 'rf_template_name',
 } as const;
 
+/** 默认后端地址：阿里云 ECS 公网 IP（Nginx 80 端口，/api 反代到后端 8081），可在选项页覆盖 */
+export const DEFAULT_BACKEND_URL = 'http://123.57.70.7';
+
 export interface StoredAuth {
   token: string;
   userId: number;
@@ -29,7 +32,7 @@ export async function getAuth(): Promise<StoredAuth | null> {
             token: result[STORAGE_KEYS.TOKEN],
             userId: result[STORAGE_KEYS.USER_ID],
             username: result[STORAGE_KEYS.USERNAME],
-            backendUrl: result[STORAGE_KEYS.BACKEND_URL] || 'http://localhost:8080',
+            backendUrl: result[STORAGE_KEYS.BACKEND_URL] || DEFAULT_BACKEND_URL,
           });
         } else {
           resolve(null);
@@ -100,7 +103,7 @@ export async function saveSelectedTemplate(id: number, name: string): Promise<vo
 export async function getBackendUrl(): Promise<string> {
   return new Promise((resolve) => {
     chrome.storage.local.get([STORAGE_KEYS.BACKEND_URL], (result) => {
-      resolve(result[STORAGE_KEYS.BACKEND_URL] || 'http://localhost:8080');
+      resolve(result[STORAGE_KEYS.BACKEND_URL] || DEFAULT_BACKEND_URL);
     });
   });
 }

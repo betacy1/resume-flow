@@ -27,6 +27,13 @@ export function scanFields(): FieldInfo[] {
   return fields;
 }
 
+/** 扫描单个元素（悬浮面板“填写当前输入框”使用） */
+export function scanElement(el: HTMLElement): FieldInfo | null {
+  const normalized = normalizeEditableElement(el);
+  if (!normalized) return null;
+  return extractFieldInfo(normalized);
+}
+
 function normalizeEditableElement(el: HTMLElement): HTMLElement | null {
   if (el.tagName.toLowerCase() === 'iframe') {
     return null;
@@ -179,9 +186,10 @@ function getXPath(el: HTMLElement): string {
   const parts: string[] = [];
   let current: HTMLElement | null = el;
   while (current && current !== document.body) {
-    const parent = current.parentElement;
+    const parent: HTMLElement | null = current.parentElement;
     if (!parent) break;
-    const siblings = Array.from(parent.children).filter((c) => c.tagName === current!.tagName);
+    const curTag = current.tagName;
+    const siblings = Array.from(parent.children).filter((c: Element) => c.tagName === curTag);
     const index = siblings.indexOf(current) + 1;
     parts.unshift(`${current.tagName.toLowerCase()}${siblings.length > 1 ? `[${index}]` : ''}`);
     current = parent;

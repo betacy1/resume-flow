@@ -151,15 +151,94 @@ export async function autofillMatch(
   pageTitle: string,
   fields: FieldInfo[],
   audienceType?: string,
+  jobDirection?: string,
+  preferredInternshipId?: number,
 ): Promise<AutofillMatchResponse> {
   return request<AutofillMatchResponse>('/api/autofill/match', {
     method: 'POST',
-    body: JSON.stringify({ templateId, pageUrl, pageTitle, fields, audienceType }),
+    body: JSON.stringify({ templateId, pageUrl, pageTitle, fields, audienceType, jobDirection, preferredInternshipId }),
   });
+}
+
+export interface InternshipItem {
+  id: number;
+  company?: string;
+  department?: string;
+  position?: string;
+  shortName?: string;
+}
+
+/** 获取实习经历列表，用于插件端选择优先经历 */
+export async function getInternships(): Promise<InternshipItem[]> {
+  const profile = await request<{ internshipList?: InternshipItem[] }>('/api/profile');
+  return profile?.internshipList || [];
+}
+
+export interface TemplateExperienceConfigItem {
+  id?: number;
+  templateId?: number;
+  sourceType?: string;
+  sourceId?: number;
+  sourceName?: string;
+  includedInResume?: boolean;
+  autoFillEnabled?: boolean;
+  autoFillPriority?: number;
+  manualSelectable?: boolean;
+  emphasisTags?: string;
+  displayOrder?: number;
+}
+
+/** 获取模板下的经历配置，用于手选经历时判断是否默认展示 */
+export async function getTemplateConfigs(templateId: number): Promise<TemplateExperienceConfigItem[]> {
+  return request<TemplateExperienceConfigItem[]>(`/api/template-configs?templateId=${templateId}`);
 }
 
 export async function addFieldKeyword(fieldId: number, keyword: string): Promise<void> {
   return request<void>(`/api/custom-fields/${fieldId}/keywords?keyword=${encodeURIComponent(keyword)}`, {
     method: 'POST',
   });
+}
+
+// ==================== 同步接口 ====================
+
+export interface SyncStatus {
+  profileVersion: number;
+  dataHash: string;
+  updatedAt: string;
+}
+
+/** 服务端数据版本状态（版本号 + 内容哈希 + 更新时间） */
+export async function getSyncStatus(): Promise<SyncStatus> {
+  return request<SyncStatus>('/api/sync/status');
+}
+
+/** 全量同步载荷：基础信息/教育/实习/项目/技能/素材/字段规则/模板配置/内容版本 */
+export interface SyncFullPayload {
+  profileVersion: number;
+  dataHash: string;
+  updatedAt: string;
+  basicInfo: Record<string, any> | null;
+  educationList: any[];
+  internshipList: any[];
+  projectList: any[];
+  skillList: any[];
+  awardList: any[];
+  materials: any[];
+  customFields: CustomFieldItem[];
+  templates: TemplateItem[];
+  templateConfigs: TemplateExperienceConfigItem[];
+  contentVariants: any[];
+}
+
+export async function getSyncFull(): Promise<SyncFullPayload> {
+  return request<SyncFullPayload>('/api/sync/full');
+}
+
+/** 查询专业技能（七个分组 + 各模板技能内容版本） */
+export async function getSkills(): Promise<{
+  skillKeys: Record<string, string>;
+  skills: Array<{ skillKey: string; skillName: string; content: string; sortOrder?: number }>;
+  variants: Array<{ id: number; audienceType: string; fieldType: string; lengthType: string; content: string }>;
+}> {
+  return request('/api/skills');
 }
